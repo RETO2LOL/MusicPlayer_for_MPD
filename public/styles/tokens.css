@@ -1,0 +1,31 @@
+/* Design tokens — colors, sizing, type. Single source of truth. */
+:root {
+  /* Colors */
+  --bg-0: #0b0d10;
+  --bg-1: #121519;
+  --bg-2: #181c21;
+  --bg-3: #1f242b;
+  --bg-hover: #252b33;
+  --border: #262c34;
+  --text-0: #f4f6f8;
+  --text-1: #c7cdd6;
+  --text-2: #8a93a0;
+  --text-3: #5b6470;
+  --accent: #7c5cff;
+  --accent-hover: #8e72ff;
+  --accent-soft: rgba(124, 92, 255, 0.18);
+  --danger: #ff5a5f;
+  --ok: #2ecc71;
+  --warn: #f5a623;
+
+  /* Sizing */
+  --topbar-h: 56px;
+  --player-h: 88px;
+  --sidebar-w: 220px;
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  /* Type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}

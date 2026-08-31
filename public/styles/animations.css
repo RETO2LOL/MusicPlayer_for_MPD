@@ -1,0 +1,88 @@
+/* animations.css — keyframes and motion tokens.
+   Keep durations short (<300ms) so the UI feels responsive. */
+
+:root {
+  --motion-fast: 120ms;
+  --motion:      200ms;
+  --motion-slow: 320ms;
+  --ease:        cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* ---- View enter ---- */
+
+@keyframes viewEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.view-enter { animation: viewEnter var(--motion) var(--ease) both; }
+
+/* ---- Track row hover lift ---- */
+.track, .browse-row {
+  transition: background-color var(--motion-fast) var(--ease),
+              transform   var(--motion-fast) var(--ease);
+}
+.track:hover, .browse-row:hover { transform: translateX(2px); }
+
+/* ---- Album card ---- */
+.album-card {
+  transition: transform var(--motion) var(--ease),
+              box-shadow var(--motion) var(--ease);
+}
+.album-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+}
+
+/* ---- Artwork pulse on track change ---- */
+@keyframes artworkPulse {
+  0%   { box-shadow: 0 0 0 0 var(--accent-soft); }
+  60%  { box-shadow: 0 0 0 12px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.artwork.is-pulsing { animation: artworkPulse 600ms var(--ease) 1; }
+
+/* ---- Toast in/out ---- */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(20px) scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes toastOut {
+  to { opacity: 0; transform: translateX(20px); }
+}
+.toast         { animation: toastIn var(--motion) var(--ease) both; }
+.toast.is-leaving { animation: toastOut var(--motion) var(--ease) both; }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---- Sidebar active border growth ---- */
+.nav-item {
+  border-left: 2px solid transparent;
+  padding-left: 10px;
+  transition: background-color var(--motion-fast) var(--ease),
+              color var(--motion-fast) var(--ease),
+              border-color var(--motion) var(--ease);
+}
+.nav-item.is-active { border-left-color: var(--accent); }
+
+/* ---- Search results fade ---- */
+.search-results { animation: fadeIn var(--motion-fast) var(--ease) both; }
+
+/* ---- Spinner ---- */
+.spinner-ring {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--bg-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner { display: inline-flex; align-items: center; justify-content: center; gap: 10px; }
+.loading { display: flex; align-items: center; justify-content: center; padding: 32px; gap: 10px; }

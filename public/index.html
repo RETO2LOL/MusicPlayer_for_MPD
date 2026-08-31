@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Music Player for MPD</title>
+
+    <!-- Styles: tokens → base → layout → components → animations → responsive -->
+    <link rel="stylesheet" href="styles/tokens.css">
+    <link rel="stylesheet" href="styles/base.css">
+    <link rel="stylesheet" href="styles/layout.css">
+    <link rel="stylesheet" href="styles/components.css">
+    <link rel="stylesheet" href="styles/animations.css">
+    <link rel="stylesheet" href="styles/responsive.css">
+
+    <!-- App entry (ES module) -->
+    <script type="module" src="src/main.js" defer></script>
+  </head>
+  <body>
+    <div class="app">
+      <!-- Top bar: brand, search, server status, shortcuts help -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">♪</span>
+          <span class="brand-name">MPD</span>
+        </div>
+
+        <div class="search" id="searchWrap">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input
+            type="search"
+            class="search-input"
+            id="searchInput"
+            placeholder="Search tracks, artists, albums…"
+            aria-label="Search library"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <div class="search-results" id="searchResults" hidden></div>
+        </div>
+
+        <div class="topbar-right">
+          <div class="status" title="Server status" id="status">
+            <span class="status-dot" data-state="disconnected"></span>
+            <span class="status-label">Disconnected</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main layout: sidebar + content -->
+      <main class="layout">
+        <aside class="sidebar" aria-label="Library navigation">
+          <nav>
+            <ul class="nav-list" id="navList">
+              <li><a href="#now-playing" class="nav-item is-active" data-view="now-playing">Now Playing</a></li>
+              <li><a href="#queue"        class="nav-item"           data-view="queue">Queue</a></li>
+              <li><a href="#library"      class="nav-item"           data-view="library">Library</a></li>
+              <li><a href="#playlists"    class="nav-item"           data-view="playlists">Playlists</a></li>
+              <li><a href="#artists"      class="nav-item"           data-view="artists">Artists</a></li>
+              <li><a href="#albums"       class="nav-item"           data-view="albums">Albums</a></li>
+              <li><a href="#files"        class="nav-item"           data-view="files">Files</a></li>
+            </ul>
+          </nav>
+
+          <div class="sidebar-footer">
+            <div class="lib-stats muted" id="libStats">— tracks</div>
+            <div class="muted">v0.2.0</div>
+          </div>
+        </aside>
+
+        <section class="content" aria-label="Main view" tabindex="-1" id="view">
+          <header class="content-header">
+            <h2 class="view-title" id="viewTitle">Now Playing</h2>
+            <div class="content-actions" id="viewActions"></div>
+          </header>
+
+          <div class="view-body" id="viewBody"></div>
+        </section>
+      </main>
+
+      <!-- Footer: now playing + transport controls -->
+      <footer class="player" aria-label="Player controls">
+        <div class="now-playing">
+          <div class="artwork artwork-sm" id="artworkSm" aria-hidden="true">
+            <span class="artwork-glyph">♪</span>
+          </div>
+          <div class="now-playing-meta">
+            <div class="now-playing-title" id="nowTitle">Nothing playing</div>
+            <div class="now-playing-artist" id="nowArtist">—</div>
+          </div>
+        </div>
+
+        <div class="transport">
+          <div class="transport-buttons">
+            <button class="ctrl" type="button" title="Shuffle (S)" aria-label="Shuffle" id="shuffleBtn">⤮</button>
+            <button class="ctrl" type="button" title="Previous (←)" aria-label="Previous" id="prevBtn">⏮</button>
+            <button class="ctrl ctrl-play" type="button" title="Play / Pause (Space)" aria-label="Play / Pause" id="playBtn">▶</button>
+            <button class="ctrl" type="button" title="Next (→)" aria-label="Next" id="nextBtn">⏭</button>
+            <button class="ctrl" type="button" title="Repeat (R)" aria-label="Repeat" id="repeatBtn">↻</button>
+          </div>
+          <div class="progress" role="group" aria-label="Playback progress">
+            <span class="time time-current" id="timeCurrent">0:00</span>
+            <div class="progress-track" id="progressTrack">
+              <div class="progress-bar" id="progressBar" style="width: 0%;"></div>
+              <div class="progress-thumb" id="progressThumb" style="left: 0%;"></div>
+            </div>
+            <span class="time time-total" id="timeTotal">0:00</span>
+          </div>
+        </div>
+
+        <div class="extras">
+          <button class="ctrl ctrl-small" type="button" title="Mute (M)" aria-label="Mute" id="muteBtn">🔊</button>
+          <input
+            type="range"
+            class="volume"
+            id="volume"
+            min="0"
+            max="100"
+            value="70"
+            aria-label="Volume"
+          >
+        </div>
+      </footer>
+    </div>
+
+    <!-- Toast notifications -->
+    <div class="toast-stack" id="toasts" aria-live="polite"></div>
+
+  </body>
+</html>

@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Test / build artifacts
+dist/
+build/
+coverage/
+.tmp/
+.cache/
+
+# Server runtime
+/tmp/
+
+# Orphan deps that came with the original scaffold — root-owned and
+# unremovable, replaced by `server/node_modules/` after `npm install`.
+/node_modules/

@@ -85,7 +85,8 @@ function render() {
 export function mount(root) {
   container = root;
   load("/");
-  unsub = mpd.subscribe(render);
+  // File browser is local to this view — re-rendering on every state push
+  // would tear down the rows and cause the artwork to flicker on hover.
 }
 
 export function unmount() {

@@ -24,11 +24,15 @@ async function connectLoop() {
     try {
       await mpc.connectTCP(HOST, PORT);
       if (PASSWORD) await mpc.connection.sendCommands([`password ${PASSWORD}`]);
+      // Mark connected as soon as the TCP+socket handshake completes.
+      // The "ready" event also fires here, but relying on it alone
+      // can leave us stuck in disconnected state if the event is
+      // missed during a reconnect race.
       connected = true;
       console.log(`[mpd] connected to ${HOST}:${PORT}`);
       return;
     } catch (err) {
-      console.error(`[mpd] connect failed: ${err.message}`);
+      console.error(`[mpd] connect failed: ${err?.message ?? err}`);
       console.error(`[mpd] retrying in 3s — is MPD running on ${HOST}:${PORT}?`);
       await new Promise((r) => setTimeout(r, 3000));
     }
@@ -157,7 +161,18 @@ export async function handleCommand(msg) {
   if (!connected) throw new Error("mpd not connected");
   const fn = commands[cmd];
   if (!fn) throw new Error(`unknown command: ${cmd}`);
-  let result = await fn(args);
+  let result;
+  try {
+    result = await fn(args);
+  } catch (err) {
+    // mpc-js sometimes throws on a dead connection without firing its
+    // own socket-error event. Kick a reconnect so the next call works.
+    const msg = err?.message ?? String(err);
+    if (/not connected|disconnected|invalid state/i.test(msg)) {
+      reconnect().catch((e) => console.error("[mpd] reconnect failed:", e?.message ?? e));
+    }
+    throw err;
+  }
   // Normalize track-shaped and lsinfo-shaped results so the frontend
   // sees consistent field names.
   if (["playlist", "search", "listplaylist", "lsinfo"].includes(cmd)) {
@@ -205,9 +220,24 @@ export async function snapshotState() {
       },
     };
   } catch (err) {
-    console.error("[mpd] snapshot failed:", err.message);
-    connected = false;
-    return snapshotState(); // returns disconnected shape
+    // A snapshot can fail transiently (e.g. MPD is busy with another
+    // command, or two snapshots race). For most errors we just return
+    // a disconnected shape and let the next snapshot try again.
+    // For real connection failures ("Not connected", "Disconnected")
+    // we trigger a reconnect — mpc-js's automatic recovery doesn't
+    // always fire `socket-error` reliably, so we kick it ourselves.
+    const msg = err?.message ?? String(err);
+    console.error("[mpd] snapshot failed:", msg);
+    if (/not connected|disconnected|invalid state/i.test(msg)) {
+      // Don't await — let the next snapshot decide if we recovered.
+      reconnect().catch((e) => console.error("[mpd] reconnect failed:", e?.message ?? e));
+    }
+    return {
+      connected: false, playing: false, track: null, queue: [],
+      volume: 0, elapsed: 0, duration: 0,
+      random: false, repeat: 0, single: false,
+      stats: { artists: 0, albums: 0, songs: 0 },
+    };
   }
 }
 
@@ -230,7 +260,7 @@ export function startIdleLoop(onChange) {
       const state = await snapshotState();
       onChange(state);
     } catch (err) {
-      console.error("[idle] snapshot failed:", err.message);
+      console.error("[idle] snapshot failed:", err?.message ?? err);
     } finally {
       pushing = false;
       // If a change arrived while we were busy, flush again.

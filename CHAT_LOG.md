@@ -229,3 +229,94 @@ Start by reading this file, then:
 4. Open the browser console — should be clean.
 5. The first thing to add next is probably a paginated library view, or
    persistent album-art caching, depending on the next user request.
+
+## Pickup notes — 2026-09-01 (next session)
+
+Two unrelated changes from the previous session; both verified in a real
+Firefox browser via Playwright.
+
+### 1. Artwork flicker (frontend)
+
+Symptom: the large now-playing artwork flickered when playback started,
+and any element with image art flickered on hover. Root cause: every
+state push re-ran `mountArtwork` and re-created the `<img>` element,
+even when the URI was unchanged. Worse, every view (queue, library,
+artists, albums, files, playlists) re-rendered its full DOM tree on
+every state push, so track rows were torn down and rebuilt on every
+MPD tick — losing hover state and showing a visible flicker.
+
+Fixes:
+- `public/src/artwork.js` — made `mountArtwork` idempotent. If the
+  container already has a successfully-loaded image for the same URI,
+  it's a no-op. Fixed the placeholder glyph reset so it's visible
+  again when an image fails or the URI changes.
+- `public/src/views/now-playing.js` — keep the card, artwork, and
+  meta DOM stable across state pushes; only rebuild on real track
+  changes. Up-next still rebuilds (queue content can change).
+- `public/src/views/queue.js` — only update the `.is-playing` class
+  in place when the queue contents are unchanged; reuse `<li>` rows
+  whose URI matches the new queue, so loaded artwork stays put.
+- `public/src/views/library.js`, `artists.js`, `albums.js`, `files.js`,
+  `playlists.js` — removed `mpd.subscribe(render)`. These views hold
+  data that's local to the view (loaded once or via explicit user
+  action); re-rendering on every MPD tick was the main source of the
+  hover flicker on track rows in those views.
+
+### 2. MPD bridge getting stuck "Not connected" (server)
+
+Symptom: after some activity (a few WS clients connecting, an idle
+loop tick) the bridge would settle into a state where every command
+returned `"mpd not connected"`, even though MPD itself was fine. The
+client UI showed "Disconnected" status and views that needed to
+fetch data (artists, albums, files) never recovered. Console was full
+of `[mpd] snapshot failed: Not connected` lines.
+
+Root cause: mpc-js throws `"Not connected"` / `"Disconnected"` from
+failing commands, but it doesn't always fire its own `socket-error`
+event in response. The bridge was relying solely on that event to
+trigger `reconnect()`, so a transient disconnect would leave the
+bridge permanently in the `connected = false` state.
+
+Fix: in `server/mpd-bridge.js`, both `snapshotState()` and
+`handleCommand()` now catch connection-level errors and call
+`reconnect()` themselves when the error message matches
+"Not connected" / "Disconnected" / "Invalid state". Also: the
+`catch` in `snapshotState` no longer sets `connected = false` and
+recurses (which used to leave the bridge wedged even after a
+transient error); it just returns the disconnected shape and lets
+the next snapshot try again. `connected` is now only flipped to
+false by `reconnect()` itself or the `socket-error` handler.
+
+Also: `connected = true` is now set as soon as `mpc.connectTCP()`
+resolves, not waiting for the `ready` event — the event can be
+missed during a reconnect race, and this leaves the bridge stuck.
+
+## What to investigate next session
+
+- **`socket-error` is fragile in mpc-js v2.1.1.** The library sometimes
+  throws connection errors without firing the event. If we hit more of
+  these, the regex of error messages above is brittle. A more robust
+  fix would be a periodic health check (e.g. `mpc.ping()` every 30s) —
+  but that's out of scope here, just worth knowing.
+- **The "Not connected" → reconnect path can still race.** `reconnect()`
+  is `await`ed from inside `handleCommand` (with `.catch` to swallow
+  the error), but not from `snapshotState` (we don't await it, so the
+  next snapshot can race the reconnect). It seems to work in practice;
+  worth keeping an eye on it.
+- **Artist / Albums / Files views were still showing "Nothing here" in
+  the headless browser test, even after the bridge fix.** I ran out of
+  time to confirm whether that's a real bug or a test artifact (the
+  views call `mpd.list` / `mpd.search` on mount, and the test was
+  racing the connection). The Library view (which calls `mpd.search`
+  the same way) DID load 5049 tracks, so the pattern works — start
+  the next session by reproducing the artists/albums empty state in
+  the real Zen browser and figuring out whether the call is being
+  made at all. Most likely the headless test's WS connection was
+  finishing after the view's `loadArtists()` already resolved with
+  an empty result.
+- **The bridge loop is still there.** `mpc.on("changed", schedule)`
+  fires on every MPD subsystem change, including the changes our own
+  `snapshotState()` triggers. The 60ms debounce keeps it from
+  saturating, but the server is still pushing state on every MPD
+  internal event. The user explicitly asked me NOT to touch the loop
+  this session; revisit only if asked.

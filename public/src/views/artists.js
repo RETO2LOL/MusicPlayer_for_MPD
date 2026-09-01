@@ -124,7 +124,8 @@ export function mount(root) {
   container = root;
   window.addEventListener("search:focus", onSearchFocus);
   loadArtists();
-  unsub = mpd.subscribe(render);
+  // Data is local to this view — no need to re-render on every MPD state
+  // push (which would tear down the row DOM and flicker on hover).
 }
 
 export function unmount() {

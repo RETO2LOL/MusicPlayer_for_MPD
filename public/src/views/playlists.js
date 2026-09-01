@@ -151,7 +151,8 @@ export function mount(root, { setActions }) {
   container = root;
   actions(setActions);
   loadList();
-  unsub = mpd.subscribe(render);
+  // Data is local to this view — no need to re-render on every MPD state
+  // push (which would tear down the rows and flicker on hover).
 }
 
 export function unmount() {

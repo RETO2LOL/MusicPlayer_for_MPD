@@ -63,7 +63,9 @@ export function mount(root, { setActions }) {
     }, "Rescan"),
   );
   load();
-  unsub = mpd.subscribe(render);
+  // Library is static once loaded — don't subscribe to state pushes,
+  // otherwise every MPD tick tears down all the <img> elements and
+  // causes a visible flicker on hover.
 }
 
 export function unmount() {

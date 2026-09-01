@@ -37,58 +37,93 @@ function gradientFor(uri) {
 function showPlaceholder(container) {
   container.classList.remove("has-artwork", "is-loading");
   container.style.background = gradientFor(container.dataset.uri || "");
-  // Add a glyph if the container doesn't already have one.
-  if (!container.querySelector(".artwork-glyph")) {
-    const g = document.createElement("span");
+  // Add a glyph if the container doesn't already have one; reset its
+  // visibility in case it was hidden by a previous successful load.
+  let g = container.querySelector(".artwork-glyph");
+  if (!g) {
+    g = document.createElement("span");
     g.className = "artwork-glyph";
     g.textContent = "♪";
     g.setAttribute("aria-hidden", "true");
     container.appendChild(g);
+  } else {
+    g.style.display = "";
   }
 }
 
 /**
  * Mount an artwork image into `container`. If the URI has art, we'll use it;
  * otherwise the container shows a music-note placeholder.
+ *
+ * Idempotent: if the container already has artwork loaded for the same URI,
+ * this is a no-op. State pushes re-render the now-playing footer on every
+ * tick of the progress bar; rebuilding the <img> element each time would
+ * tear down the loaded bitmap and cause a visible flicker whenever the
+ * user hovers over the artwork (or the track changes, or playback starts).
  */
 export function mountArtwork(container, { uri, size = 56, rounded = true } = {}) {
   if (!container) return null;
 
-  container.dataset.uri = uri || "";
-  showPlaceholder(container);
+  const prevUri = container.dataset.uri || "";
+  const nextUri = uri || "";
+  container.dataset.uri = nextUri;
   container.classList.add("has-artwork");
 
-  if (!uri) return null;
+  if (!nextUri) {
+    // No art requested — wipe the container and show the placeholder.
+    container.replaceChildren();
+    showPlaceholder(container);
+    return null;
+  }
+
+  // Same URI, and we already have a successful <img> in the DOM → nothing to do.
+  const existing = container.querySelector("img.artwork-img");
+  if (prevUri === nextUri && existing && existing.dataset.loaded === "1") {
+    container.classList.add("has-artwork");
+    container.classList.remove("is-loading");
+    return existing;
+  }
+
+  // Different URI (or first mount, or previous load failed): build a fresh image.
+  // Add the placeholder first so the gradient shows immediately, then layer
+  // the new <img> on top — the placeholder stays visible until the load
+  // event hides the glyph.
+  showPlaceholder(container);
+  container.classList.add("is-loading");
 
   const img = new Image();
   img.loading = "lazy";
   img.decoding = "async";
   img.alt = "";
   img.className = "artwork-img";
+  if (rounded) img.classList.add("artwork-rounded");
   if (size) {
     img.width = size;
     img.height = size;
     img.style.width = size + "px";
     img.style.height = size + "px";
   }
-  if (rounded) img.classList.add("artwork-rounded");
-
-  container.classList.add("is-loading");
 
   img.addEventListener("load", () => {
+    img.dataset.loaded = "1";
     container.classList.remove("is-loading");
+    container.classList.add("has-artwork");
     // Hide the placeholder glyph once we have real art.
     const g = container.querySelector(".artwork-glyph");
     if (g) g.style.display = "none";
   });
   img.addEventListener("error", () => {
+    img.dataset.loaded = "0";
     container.classList.remove("is-loading");
     // Keep the placeholder visible.
     showPlaceholder(container);
   });
 
-  img.src = mpd.artworkUrl(uri);
+  // Remove any previous <img> but keep the placeholder glyph.
+  const oldImg = container.querySelector("img.artwork-img");
+  if (oldImg) oldImg.remove();
   container.appendChild(img);
+  img.src = mpd.artworkUrl(nextUri);
   return img;
 }
 
@@ -98,7 +133,10 @@ export function refreshArtwork(container, uri, size = 56) {
   if (!uri) {
     container.replaceChildren();
     container.classList.remove("has-artwork", "is-loading");
+    container.dataset.uri = "";
     return;
   }
+  // Only swap if the URI actually changed; otherwise the existing image stays.
+  if (container.dataset.uri === uri) return;
   mountArtwork(container, { uri, size });
 }

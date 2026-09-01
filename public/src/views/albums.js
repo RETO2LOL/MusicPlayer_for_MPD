@@ -106,7 +106,8 @@ export function mount(root) {
   container = root;
   window.addEventListener("search:focus", onSearchFocus);
   loadAlbums();
-  unsub = mpd.subscribe(render);
+  // Data is local to this view — re-rendering on every MPD state push
+  // would tear down the album grid's <img> elements and flicker on hover.
 }
 
 export function unmount() {

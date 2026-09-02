@@ -1,4 +1,4 @@
-# Music Player for MPD
+# Music Player for MPD (BETA)
 
 A modern, fully-featured web client for [Music Player Daemon](https://www.musicpd.org/).
 Vanilla HTML / CSS / ES modules on the frontend, a tiny Node / Express server bridges

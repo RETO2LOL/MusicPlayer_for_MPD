@@ -34,3 +34,7 @@ coverage/
 # Orphan deps that came with the original scaffold — root-owned and
 # unremovable, replaced by `server/node_modules/` after `npm install`.
 /node_modules/
+
+# Local chat log — this is a working scratchpad for build sessions,
+# not part of the public repo. New sessions create their own.
+CHAT_LOG.md

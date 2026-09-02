@@ -102,9 +102,12 @@ function onSearchFocus(e) {
   loadTracks(e.detail.value);
 }
 
-export function mount(root) {
+export async function mount(root) {
   container = root;
   window.addEventListener("search:focus", onSearchFocus);
+  // Wait for the WS to open before issuing the first command.
+  try { await mpd.whenReady(); } catch { /* see artists.js for rationale */ }
+  if (!container) return;
   loadAlbums();
   // Data is local to this view — re-rendering on every MPD state push
   // would tear down the album grid's <img> elements and flicker on hover.

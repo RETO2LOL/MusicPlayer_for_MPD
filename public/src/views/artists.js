@@ -120,9 +120,14 @@ function onSearchFocus(e) {
   loadAlbums(e.detail.value);
 }
 
-export function mount(root) {
+export async function mount(root) {
   container = root;
   window.addEventListener("search:focus", onSearchFocus);
+  // Wait for the WS to open before issuing the first command — otherwise
+  // `mpd.list("Artist")` rejects with "not connected" and the view shows
+  // "Nothing here" forever.
+  try { await mpd.whenReady(); } catch { /* socket closed before open; we'll stay in loading state until next mount */ }
+  if (!container) return;
   loadArtists();
   // Data is local to this view — no need to re-render on every MPD state
   // push (which would tear down the row DOM and flicker on hover).

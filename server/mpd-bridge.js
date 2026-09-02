@@ -14,6 +14,7 @@ const PASSWORD = process.env.MPD_PASSWORD || null;
 export const mpc = new MPC();
 let connected = false;
 let connecting = null;
+let reconnecting = null; // single in-flight reconnect; everyone awaits this
 
 export async function startMpd() {
   return connectLoop();
@@ -39,11 +40,27 @@ async function connectLoop() {
   }
 }
 
-/** Force a reconnect (used when an idle call fails). */
-export async function reconnect() {
+/** Force a reconnect (used when an idle call fails). Idempotent — concurrent
+ *  callers all share the same in-flight reconnect promise, so we don't
+ *  open multiple parallel sockets. */
+export function reconnect() {
+  if (reconnecting) return reconnecting;
   connected = false;
   try { mpc.disconnect(); } catch { /* ignore */ }
-  await connectLoop();
+  reconnecting = (async () => {
+    try {
+      await connectLoop();
+    } finally {
+      reconnecting = null;
+    }
+  })();
+  return reconnecting;
+}
+
+/** Wait for any in-flight reconnect to finish. Returns immediately if
+ *  we're already connected. */
+export async function awaitReconnect() {
+  if (reconnecting) await reconnecting.catch(() => {});
 }
 
 // ---------- Result normalization ----------
@@ -158,7 +175,12 @@ const commands = {
 
 export async function handleCommand(msg) {
   const { id, cmd, ...args } = msg;
-  if (!connected) throw new Error("mpd not connected");
+  if (!connected) {
+    // A reconnect may already be in flight — wait for it so the caller
+    // doesn't see a permanent "mpd not connected".
+    await awaitReconnect();
+    if (!connected) throw new Error("mpd not connected");
+  }
   const fn = commands[cmd];
   if (!fn) throw new Error(`unknown command: ${cmd}`);
   let result;
@@ -188,12 +210,18 @@ export async function handleCommand(msg) {
 
 export async function snapshotState() {
   if (!connected) {
-    return {
-      connected: false, playing: false, track: null, queue: [],
-      volume: 0, elapsed: 0, duration: 0,
-      random: false, repeat: 0, single: false,
-      stats: { artists: 0, albums: 0, songs: 0 },
-    };
+    // A reconnect may already be in flight. Wait for it — otherwise we'd
+    // race the reconnect and return a permanently-disconnected state
+    // to every client.
+    await awaitReconnect();
+    if (!connected) {
+      return {
+        connected: false, playing: false, track: null, queue: [],
+        volume: 0, elapsed: 0, duration: 0,
+        random: false, repeat: 0, single: false,
+        stats: { artists: 0, albums: 0, songs: 0 },
+      };
+    }
   }
   try {
     const [status, currentSong, playlist, stats] = await Promise.all([
@@ -229,7 +257,6 @@ export async function snapshotState() {
     const msg = err?.message ?? String(err);
     console.error("[mpd] snapshot failed:", msg);
     if (/not connected|disconnected|invalid state/i.test(msg)) {
-      // Don't await — let the next snapshot decide if we recovered.
       reconnect().catch((e) => console.error("[mpd] reconnect failed:", e?.message ?? e));
     }
     return {
@@ -282,4 +309,19 @@ export function startIdleLoop(onChange) {
     await reconnect();
   });
   mpc.on("ready", () => { connected = true; });
+
+  // Periodic health check. mpc-js sometimes fails to fire its
+  // `socket-error` event on a dead connection, leaving us stuck in
+  // `connected = true` even though the socket is gone. A lightweight
+  // `ping` every 30s catches that and triggers a clean reconnect.
+  setInterval(async () => {
+    if (!connected || reconnecting) return;
+    try {
+      await mpc.connection.ping();
+    } catch (err) {
+      const msg = err?.message ?? String(err);
+      console.warn("[mpd] health-check ping failed:", msg);
+      reconnect().catch((e) => console.error("[mpd] reconnect failed:", e?.message ?? e));
+    }
+  }, 30_000).unref?.();
 }

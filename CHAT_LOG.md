@@ -320,3 +320,62 @@ missed during a reconnect race, and this leaves the bridge stuck.
   saturating, but the server is still pushing state on every MPD
   internal event. The user explicitly asked me NOT to touch the loop
   this session; revisit only if asked.
+
+## Pickup notes — 2026-09-02
+
+Three follow-ups from the previous session, all addressed. The bridge
+loop itself was left alone per the user's request.
+
+### 1. Periodic `mpc.connection.ping()` health check (server)
+
+`server/mpd-bridge.js` — `startIdleLoop()` now also starts a 30s
+`setInterval` that calls `mpc.connection.ping()`. If the ping throws
+(typically `"Not connected"`), we kick a `reconnect()`. This catches
+the case where mpc-js v2.1.1 silently lets a dead connection linger
+without firing `socket-error`. The interval is `.unref()`d so it
+won't keep the Node process alive during shutdown.
+
+### 2. Reconnect race in `snapshotState` / `handleCommand` (server)
+
+`server/mpd-bridge.js` — `reconnect()` is now idempotent and stores
+its in-flight promise in a module-level `reconnecting` variable. New
+`awaitReconnect()` returns the current reconnect promise (or resolves
+immediately if there isn't one). Both `handleCommand()` and
+`snapshotState()` now `await awaitReconnect()` when `connected` is
+false, so a command that arrives mid-reconnect waits for the new
+socket to come up instead of getting a permanent `"mpd not connected"`.
+Concurrent callers share the same reconnect — no more parallel sockets
+fighting each other.
+
+### 3. Views racing the WS open (frontend)
+
+`public/src/mpd.js` — added `whenReady()`. Returns a promise that
+resolves on the next `open` event (or immediately if the WS is
+already open), and rejects if the socket closes before opening.
+
+`public/src/views/artists.js`, `albums.js`, `files.js`, `library.js`,
+`playlists.js` — `mount()` is now `async` and `await`s `mpd.whenReady()`
+before issuing the first command. Previously, the views called
+`mpd.list()` etc. synchronously, which rejected with `"not connected"`
+if the WS handshake was still in flight, leaving the view stuck on
+"Nothing here" forever. Now the view stays in the loading state until
+the WS opens, then issues the command.
+
+`public/src/router.js` — handles the now-async `mount()`: the router
+no longer relies on `mount` being synchronous, and catches rejections
+from the returned promise so they don't surface as unhandled
+rejections.
+
+### What still uses the old "fire and forget" pattern (and why)
+
+`now-playing.js` and `queue.js` don't issue commands on mount — they
+read from `mpd._state` (the subscribed state pushed by the bridge).
+Their empty/loading states come from the bridge's first state push,
+not from a command, so they were never affected by the race. Left
+unchanged.
+
+### Bridge loop: untouched
+
+Per the user's request, `mpc.on("changed", schedule)` and the 60ms
+debounce are unchanged. The server still pushes state on every MPD
+internal event; revisit only if asked.

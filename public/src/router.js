@@ -54,8 +54,12 @@ function _go(name) {
     container.classList.add("view-enter");
   }
   current = next;
-  try { next.mount(container, { setActions }); }
-  catch (e) { console.error("view mount failed:", e); }
+  try {
+    // `mount` may be async (e.g. whenReady) — swallow any rejection so
+    // it doesn't surface as an unhandled promise.
+    const r = next.mount(container, { setActions });
+    if (r && typeof r.catch === "function") r.catch((e) => console.error("view mount failed:", e));
+  } catch (e) { console.error("view mount failed:", e); }
 }
 
 /** Views call this to put buttons in the content-header actions slot. */

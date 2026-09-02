@@ -82,8 +82,11 @@ function render() {
   container.replaceChildren(breadcrumb(), dirList, fileList);
 }
 
-export function mount(root) {
+export async function mount(root) {
   container = root;
+  // Wait for the WS to open before issuing the first command.
+  try { await mpd.whenReady(); } catch { /* see artists.js for rationale */ }
+  if (!container) return;
   load("/");
   // File browser is local to this view — re-rendering on every state push
   // would tear down the rows and cause the artwork to flicker on hover.

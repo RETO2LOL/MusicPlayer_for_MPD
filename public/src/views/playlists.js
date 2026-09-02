@@ -147,9 +147,12 @@ function render() {
   container.replaceChildren(breadcrumb(), list);
 }
 
-export function mount(root, { setActions }) {
+export async function mount(root, { setActions }) {
   container = root;
   actions(setActions);
+  // Wait for the WS to open before issuing the first command.
+  try { await mpd.whenReady(); } catch { /* see artists.js for rationale */ }
+  if (!container) return;
   loadList();
   // Data is local to this view — no need to re-render on every MPD state
   // push (which would tear down the rows and flicker on hover).

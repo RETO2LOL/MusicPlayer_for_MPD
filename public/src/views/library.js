@@ -53,7 +53,7 @@ function render() {
   container.replaceChildren(list);
 }
 
-export function mount(root, { setActions }) {
+export async function mount(root, { setActions }) {
   container = root;
   setActions(
     el("button", {
@@ -62,6 +62,9 @@ export function mount(root, { setActions }) {
       onClick: () => mpd.update("/").then(() => toast("Database update started", "ok")).catch((e) => toast(e.message, "error")),
     }, "Rescan"),
   );
+  // Wait for the WS to open before issuing the first command.
+  try { await mpd.whenReady(); } catch { /* see artists.js for rationale */ }
+  if (!container) return;
   load();
   // Library is static once loaded — don't subscribe to state pushes,
   // otherwise every MPD tick tears down all the <img> elements and

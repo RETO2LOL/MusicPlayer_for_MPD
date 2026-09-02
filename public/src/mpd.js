@@ -49,6 +49,23 @@ class MPDClient {
     for (const fn of this._listeners) fn(this._state);
   }
 
+  /** Resolve when the WebSocket is open (or reject on close). If we're
+   *  already open, resolves on the next microtask. Used by views to
+   *  avoid issuing commands before the WS handshake finishes. */
+  whenReady() {
+    if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const onOpen = () => { cleanup(); resolve(); };
+      const onClose = () => { cleanup(); reject(new Error("ws closed before open")); };
+      const cleanup = () => {
+        this.ws?.removeEventListener("open", onOpen);
+        this.ws?.removeEventListener("close", onClose);
+      };
+      this.ws?.addEventListener("open", onOpen);
+      this.ws?.addEventListener("close", onClose);
+    });
+  }
+
   // ---------- Connection ----------
 
   connect() {

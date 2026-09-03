@@ -157,3 +157,5 @@ on Node 18+.
 ## License
 
 MIT
+
+This project is vibe coded

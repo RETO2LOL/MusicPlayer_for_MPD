@@ -1,8 +1,11 @@
 // views/playlists.js — saved playlists, plus create / save-current / rename / delete.
 
-import { el, trackRow, emptyState, spinner, mpd, toast, showCtxMenu } from "./_shared.js";
+import { watchConnection, el, trackRow, emptyState, spinner, mpd, toast, showCtxMenu } from "./_shared.js";
+
+import { icon } from "../icons.js";
 
 let unsub = null;
+let request = 0;
 let container = null;
 let playlists = [];
 let openName = null;
@@ -11,17 +14,19 @@ let loading = true;
 let detailLoading = false;
 
 async function loadList() {
+  const token = ++request;
   loading = true; render();
-  try { playlists = await mpd.listPlaylists(); }
-  catch (err) { toast(err.message, "error"); playlists = []; }
+  try { const result = await mpd.listPlaylists(); if (token !== request) return; playlists = result; }
+  catch (err) { if (token !== request) return; toast(err.message, "error"); playlists = []; }
   loading = false; render();
 }
 
 async function openPlaylist(name) {
+  const token = ++request;
   openName = name;
   detailLoading = true; render();
-  try { openTracks = await mpd.listPlaylist(name); }
-  catch (err) { toast(err.message, "error"); openTracks = []; }
+  try { const result = await mpd.listPlaylist(name); if (token !== request) return; openTracks = result; }
+  catch (err) { if (token !== request) return; toast(err.message, "error"); openTracks = []; }
   detailLoading = false; render();
 }
 
@@ -60,7 +65,7 @@ function actions(setActions) {
 
 function breadcrumb() {
   return el("nav", { class: "crumbs" },
-    el("a", { href: "#", onClick: (e) => { e.preventDefault(); openName = null; render(); } }, "Playlists"),
+    el("a", { href: "#", onClick: (e) => { e.preventDefault(); request++; openName = null; render(); } }, "Playlists"),
     openName ? el("span", { class: "crumb-sep" }, "›") : null,
     openName ? el("span", { class: "crumb-current" }, openName) : null,
   );
@@ -80,10 +85,14 @@ function render() {
         el("div", { class: "loading" }, spinner(), el("div", { class: "muted" }, "Loading…")));
       return;
     }
+    if (!openTracks.length) {
+      container.replaceChildren(breadcrumb(), emptyState({ title: "This playlist is empty", sub: "Save a queue to keep your favorite tracks together." }));
+      return;
+    }
     const list = el("ol", { class: "track-list" },
       ...openTracks.map((t, i) => {
-        const row = trackRow(t, i, { playing: false });
-        row.addEventListener("click", () => mpd.loadPlaylist(openName).then(() => mpd.playAt(i)).catch((e) => toast(e.message, "error")));
+        const row = trackRow(t, i, { playing: false, contextMenu: false });
+        row.addEventListener("click", () => mpd.playPlaylist(openName, i).catch((e) => toast(e.message, "error")));
         row.addEventListener("contextmenu", (e) => {
           e.preventDefault();
           showCtxMenu(e.clientX, e.clientY, [
@@ -107,7 +116,7 @@ function render() {
     ...playlists.map((p) => {
       const name = p.playlist || p.name;
       return el("li", { class: "browse-row", onClick: () => openPlaylist(name) },
-        el("span", { class: "browse-icon" }, "♬"),
+        el("span", { class: "browse-icon" }, icon("playlists")),
         el("div", { class: "browse-meta" },
           el("div", { class: "browse-title" }, name),
           el("div", { class: "browse-sub muted" }, "Playlist"),
@@ -117,7 +126,7 @@ function render() {
             class: "btn btn-ghost btn-icon",
             type: "button",
             title: "Play",
-            onClick: (e) => { e.stopPropagation(); mpd.loadPlaylist(name).then(() => mpd.playAt(0)).catch((err) => toast(err.message, "error")); },
+            onClick: (e) => { e.stopPropagation(); mpd.playPlaylist(name).catch((err) => toast(err.message, "error")); },
           }, "▶"),
           el("button", {
             class: "btn btn-ghost btn-icon",
@@ -147,18 +156,18 @@ function render() {
   container.replaceChildren(breadcrumb(), list);
 }
 
-export async function mount(root, { setActions }) {
+export function mount(root, { setActions, value }) {
   container = root;
+  loading = false;
   actions(setActions);
-  // Wait for the WS to open before issuing the first command.
-  try { await mpd.whenReady(); } catch { /* see artists.js for rationale */ }
-  if (!container) return;
-  loadList();
-  // Data is local to this view — no need to re-render on every MPD state
-  // push (which would tear down the rows and flicker on hover).
+  unsub = watchConnection(() => openName ? openPlaylist(openName) : loadList(), () => {
+    request++;
+    container?.replaceChildren(el("div", { class: "loading" }, spinner(), el("span", { class: "muted" }, "Waiting for MPD…")));
+  });
 }
 
 export function unmount() {
+  request++;
   unsub?.();
   unsub = null;
   container = null;

@@ -1,29 +1,33 @@
 // views/albums.js — grid of album cards, drill-down to tracks.
 
-import { el, trackRow, emptyState, spinner, mpd, toast, mountArtwork } from "./_shared.js";
+import { watchConnection, el, trackRow, emptyState, spinner, mpd, toast, mountArtwork } from "./_shared.js";
 
 let unsub = null;
+let request = 0;
 let container = null;
 let level = "albums"; // "albums" | "tracks"
 let current = null;
 let data = [];
 let loading = true;
+let artObserver = null;
 
 async function loadAlbums() {
+  const token = ++request;
   level = "albums";
   current = null;
   loading = true; render();
-  try { data = await mpd.list("Album"); }
-  catch (err) { toast(err.message, "error"); data = []; }
+  try { const result = await mpd.list("Album"); if (token !== request) return; data = result.filter(Boolean); }
+  catch (err) { if (token !== request) return; toast(err.message, "error"); data = []; }
   loading = false; render();
 }
 
 async function loadTracks(album) {
+  const token = ++request;
   current = album;
   level = "tracks";
   loading = true; render();
-  try { data = await mpd.search(album, "Album"); }
-  catch (err) { toast(err.message, "error"); data = []; }
+  try { const result = await mpd.find([["Album", album]]); if (token !== request) return; data = result; }
+  catch (err) { if (token !== request) return; toast(err.message, "error"); data = []; }
   loading = false; render();
 }
 
@@ -37,6 +41,7 @@ function breadcrumb() {
 
 function render() {
   if (!container) return;
+  artObserver?.disconnect();
   if (loading) {
     container.replaceChildren(breadcrumb(),
       el("div", { class: "loading" }, spinner(), el("div", { class: "muted" }, "Loading…")));
@@ -48,18 +53,27 @@ function render() {
   }
 
   if (level === "albums") {
+    artObserver = new IntersectionObserver((entries, observer) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const slot = entry.target;
+        observer.unobserve(slot);
+        if (!slot.isConnected) continue;
+        fetchAlbumArt(slot.dataset.album).then((uri) => {
+          if (uri && slot.isConnected) mountArtwork(slot, { uri, size: 200 });
+        });
+      }
+    }, { root: container, rootMargin: "120px" });
     const grid = el("div", { class: "album-grid" },
       ...data.map((albumName) => {
-        const card = el("div", { class: "album-card", onClick: () => loadTracks(albumName) },
+        const card = el("button", { class: "album-card", type: "button", onClick: () => loadTracks(albumName) },
           el("div", { class: "album-art" }),
           el("div", { class: "album-name" }, albumName),
         );
-        // Lazy-load artwork once the card is on screen — pick a file from
-        // this album and use it for cover art.
         const slot = card.querySelector(".album-art");
-        fetchAlbumArt(albumName).then((uri) => {
-          if (uri) mountArtwork(slot, { uri, size: 200 });
-        });
+        mountArtwork(slot);
+        slot.dataset.album = albumName;
+        artObserver.observe(slot);
         return card;
       }),
     );
@@ -72,9 +86,7 @@ function render() {
     ...data.map((t, i) => {
       const row = trackRow(t, i, { playing: false });
       row.addEventListener("click", () => {
-        mpd.clear()
-          .then(() => Promise.all(data.map((tr) => mpd.add(tr.file))))
-          .then(() => mpd.playAt(i))
+        mpd.playTracks(data, i)
           .catch((e) => toast(e.message, "error"));
       });
       return row;
@@ -88,7 +100,7 @@ const artCache = new Map();
 async function fetchAlbumArt(album) {
   if (artCache.has(album)) return artCache.get(album);
   try {
-    const results = await mpd.search(album, "Album");
+    const results = await mpd.find([["Album", album]]);
     const uri = results[0]?.file || null;
     artCache.set(album, uri);
     return uri;
@@ -97,25 +109,19 @@ async function fetchAlbumArt(album) {
   }
 }
 
-function onSearchFocus(e) {
-  if (e.detail?.kind !== "albums") return;
-  loadTracks(e.detail.value);
-}
-
-export async function mount(root) {
+export function mount(root, { setActions, value }) {
   container = root;
-  window.addEventListener("search:focus", onSearchFocus);
-  // Wait for the WS to open before issuing the first command.
-  try { await mpd.whenReady(); } catch { /* see artists.js for rationale */ }
-  if (!container) return;
-  loadAlbums();
-  // Data is local to this view — re-rendering on every MPD state push
-  // would tear down the album grid's <img> elements and flicker on hover.
+  unsub = watchConnection(() => value ? loadTracks(value) : loadAlbums(), () => {
+    request++;
+    container?.replaceChildren(el("div", { class: "loading" }, spinner(), el("span", { class: "muted" }, "Waiting for MPD…")));
+  });
 }
 
 export function unmount() {
+  artObserver?.disconnect();
+  artObserver = null;
+  request++;
   unsub?.();
   unsub = null;
   container = null;
-  window.removeEventListener("search:focus", onSearchFocus);
 }

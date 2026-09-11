@@ -4,19 +4,26 @@
 // returns the whole library, then render it. A rescan button triggers an
 // `update` and shows a toast.
 
-import { el, trackRow, emptyState, spinner, mpd, toast } from "./_shared.js";
+import { watchConnection, el, trackRow, emptyState, spinner, mpd, toast } from "./_shared.js";
 
 let unsub = null;
+let request = 0;
 let container = null;
 let tracks = [];
 let loading = true;
+let visibleCount = 200;
 
 async function load() {
+  const token = ++request;
   loading = true;
   render();
   try {
-    tracks = await mpd.search("", "any");
+    const result = await mpd.search("", "any");
+    if (token !== request) return;
+    tracks = result;
+    visibleCount = 200;
   } catch (err) {
+    if (token !== request) return;
     toast(err.message, "error");
     tracks = [];
   }
@@ -39,39 +46,37 @@ function render() {
     return;
   }
   const list = el("ol", { class: "track-list" },
-    ...tracks.map((t, i) => {
+    ...tracks.slice(0, visibleCount).map((t, i) => {
       const row = trackRow(t, i, { playing: false });
       row.addEventListener("click", () => {
-        mpd.clear()
-          .then(() => Promise.all(tracks.map((tr) => mpd.add(tr.file))))
-          .then(() => mpd.playAt(i))
+        mpd.playTracks(tracks, i)
           .catch((e) => toast(e.message, "error"));
       });
       return row;
     }),
   );
   container.replaceChildren(list);
+  if (visibleCount < tracks.length) {
+    container.appendChild(el("button", {
+      class: "btn btn-ghost load-more", type: "button",
+      onClick: () => { visibleCount += 200; render(); },
+    }, `Show more · ${visibleCount.toLocaleString()} of ${tracks.length.toLocaleString()} tracks`));
+  }
 }
 
-export async function mount(root, { setActions }) {
+export function mount(root, { setActions, value }) {
   container = root;
-  setActions(
-    el("button", {
-      class: "btn btn-primary",
-      type: "button",
-      onClick: () => mpd.update("/").then(() => toast("Database update started", "ok")).catch((e) => toast(e.message, "error")),
-    }, "Rescan"),
-  );
-  // Wait for the WS to open before issuing the first command.
-  try { await mpd.whenReady(); } catch { /* see artists.js for rationale */ }
-  if (!container) return;
-  load();
-  // Library is static once loaded — don't subscribe to state pushes,
-  // otherwise every MPD tick tears down all the <img> elements and
-  // causes a visible flicker on hover.
+  setActions(el("button", { class: "btn btn-ghost", type: "button",
+    onClick: () => mpd.update().then(() => toast("Database update started", "ok")).catch((e) => toast(e.message, "error")),
+  }, "Rescan library"));
+  unsub = watchConnection(() => load(), () => {
+    request++;
+    container?.replaceChildren(el("div", { class: "loading" }, spinner(), el("span", { class: "muted" }, "Waiting for MPD…")));
+  });
 }
 
 export function unmount() {
+  request++;
   unsub?.();
   unsub = null;
   container = null;

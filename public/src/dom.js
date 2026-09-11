@@ -19,6 +19,15 @@ export function el(tag, attrs, ...children) {
     if (child == null || child === false) continue;
     node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
   }
+  if (attrs?.onClick && (tag === "li" || tag === "div")) {
+    node.tabIndex = 0;
+    node.addEventListener("keydown", (event) => {
+      if (event.target !== node || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      node.click();
+    });
+  }
   return node;
 }
 

@@ -1,8 +1,11 @@
 // views/artists.js — distinct artists, drill-down to albums, then tracks.
 
-import { el, trackRow, emptyState, spinner, mpd, toast } from "./_shared.js";
+import { watchConnection, el, trackRow, emptyState, spinner, mpd, toast } from "./_shared.js";
+
+import { icon } from "../icons.js";
 
 let unsub = null;
+let request = 0;
 let container = null;
 let level = "artists";   // "artists" | "albums" | "tracks"
 let artist = null;
@@ -11,38 +14,35 @@ let data = [];
 let loading = true;
 
 async function loadArtists() {
+  const token = ++request;
   level = "artists"; artist = null; album = null;
   loading = true; render();
-  try { data = await mpd.list("Artist"); }
-  catch (err) { toast(err.message, "error"); data = []; }
+  try { const result = await mpd.list("Artist"); if (token !== request) return; data = result.filter(Boolean); }
+  catch (err) { if (token !== request) return; toast(err.message, "error"); data = []; }
   loading = false; render();
 }
 
 async function loadAlbums(a) {
-  artist = a; album = null;
-  level = "albums";
+  const token = ++request;
+  artist = a; album = null; level = "albums";
   loading = true; render();
-  // Albums by artist — mpd's `list("Album", a)` is exact-match on the
-  // AlbumArtist field, but a track's "Artist" can differ from its
-  // "AlbumArtist". Search is more forgiving and matches the typical case.
   try {
-    const hits = await mpd.search(a, "Artist");
-    const seen = new Set();
-    data = [];
-    for (const t of hits) {
-      const name = t.album || t.Album;
-      if (name && !seen.has(name)) { seen.add(name); data.push({ Album: name, AlbumArtist: a }); }
-    }
-  } catch (err) { toast(err.message, "error"); data = []; }
+    const result = await mpd.list("Album", [["Artist", a]]);
+    if (token !== request) return;
+    data = result.filter(Boolean);
+  } catch (err) { if (token !== request) return; toast(err.message, "error"); data = []; }
   loading = false; render();
 }
 
 async function loadTracks(al) {
-  album = al;
-  level = "tracks";
+  const token = ++request;
+  album = al; level = "tracks";
   loading = true; render();
-  try { data = await mpd.search(al, "Album"); }
-  catch (err) { toast(err.message, "error"); data = []; }
+  try {
+    const result = await mpd.find([["Artist", artist], ["Album", al]]);
+    if (token !== request) return;
+    data = result;
+  } catch (err) { if (token !== request) return; toast(err.message, "error"); data = []; }
   loading = false; render();
 }
 
@@ -72,7 +72,7 @@ function render() {
     const list = el("ul", { class: "browse-list" },
       ...data.map((name) => {
         return el("li", { class: "browse-row", onClick: () => loadAlbums(name) },
-          el("span", { class: "browse-icon" }, "👤"),
+          el("span", { class: "browse-icon" }, icon("artists")),
           el("div", { class: "browse-meta" }, el("div", { class: "browse-title" }, name)),
           el("span", { class: "browse-chevron muted" }, "›"),
         );
@@ -86,7 +86,7 @@ function render() {
     const list = el("ul", { class: "browse-list" },
       ...data.map((name) => {
         return el("li", { class: "browse-row", onClick: () => loadTracks(name) },
-          el("span", { class: "browse-icon" }, "💿"),
+          el("span", { class: "browse-icon" }, icon("albums")),
           el("div", { class: "browse-meta" },
             el("div", { class: "browse-title" }, name),
             el("div", { class: "browse-sub muted" }, artist),
@@ -104,9 +104,7 @@ function render() {
     ...data.map((t, i) => {
       const row = trackRow(t, i, { playing: false });
       row.addEventListener("click", () => {
-        mpd.clear()
-          .then(() => Promise.all(data.map((tr) => mpd.add(tr.file))))
-          .then(() => mpd.playAt(i))
+        mpd.playTracks(data, i)
           .catch((e) => toast(e.message, "error"));
       });
       return row;
@@ -115,27 +113,17 @@ function render() {
   container.replaceChildren(breadcrumb(), list);
 }
 
-function onSearchFocus(e) {
-  if (e.detail?.kind !== "artists") return;
-  loadAlbums(e.detail.value);
-}
-
-export async function mount(root) {
+export function mount(root, { setActions, value }) {
   container = root;
-  window.addEventListener("search:focus", onSearchFocus);
-  // Wait for the WS to open before issuing the first command — otherwise
-  // `mpd.list("Artist")` rejects with "not connected" and the view shows
-  // "Nothing here" forever.
-  try { await mpd.whenReady(); } catch { /* socket closed before open; we'll stay in loading state until next mount */ }
-  if (!container) return;
-  loadArtists();
-  // Data is local to this view — no need to re-render on every MPD state
-  // push (which would tear down the row DOM and flicker on hover).
+  unsub = watchConnection(() => value ? loadAlbums(value) : loadArtists(), () => {
+    request++;
+    container?.replaceChildren(el("div", { class: "loading" }, spinner(), el("span", { class: "muted" }, "Waiting for MPD…")));
+  });
 }
 
 export function unmount() {
+  request++;
   unsub?.();
   unsub = null;
   container = null;
-  window.removeEventListener("search:focus", onSearchFocus);
 }

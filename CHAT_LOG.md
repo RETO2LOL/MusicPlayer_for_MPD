@@ -379,3 +379,46 @@ unchanged.
 Per the user's request, `mpc.on("changed", schedule)` and the 60ms
 debounce are unchanged. The server still pushes state on every MPD
 internal event; revisit only if asked.
+
+## Pickup notes — 2026-09-11: review and style cleanup
+
+Read the previous notes and audited the actual source and installed mpc-js.
+The detailed findings, remaining limitations, and verification are in
+`docs/REVIEW.md`. Desktop/mobile screenshots are under `docs/`.
+
+Corrections to earlier guidance:
+- Volume, random, repeat, and single belong to `mpc.playbackOptions`, not
+  `mpc.playback`. Seeking the current track is `mpc.playback.seekCur(seconds)`.
+- Repeat-one requires **repeat 1 + single 1**. Repeat 0 + single 1 stops at
+  the end of the song. The frontend state now maps the two flags to 0/1/2.
+- `connection.password()` replaces the nonexistent `connection.sendCommands()`.
+- Saving the queue creates a copy, not an empty playlist. New playlist saves
+  under a new name and then clears that stored playlist, without clearing
+  the active queue. Saving fails first if the name already exists.
+- `mpc-js` interpolates many quoted command arguments without escaping them;
+  the bridge now escapes strings and rejects line breaks and invalid numbers.
+
+Connection recovery: `server/mpd-connection.js` subclasses MPC to normalize
+socket end/error handling and preserve Node Buffer boundaries. Native mpc-js
+stream cancellation could reject unhandled and terminate Node during outages.
+Connection attempts now settle on socket failure or timeout. Offline snapshots
+return promptly; successful reconnect publishes fresh state. Browse views load
+on an actual MPD connection transition and discard stale async results. Pending
+browser commands reject on WebSocket closure and have a timeout.
+
+Search artist/album selection now lives in the hash query string, avoiding the
+custom-event mount race. Artist albums are strings and use exact matching;
+nested file paths are preserved. Saved playlist playback and bulk queue
+replacement are single bridge commands. Read-only queries no longer cause a
+full queue snapshot/broadcast each time. The existing changed-event debounce
+and idle scheduling code were preserved.
+
+Style: charcoal/green palette, shared local SVG icons, simpler motion, improved
+spacing and typography, visible mobile navigation, focus styles, and pointer/
+keyboard seeking. Artwork and unchanged now-playing rows remain stable; loading
+and missing artwork are not re-requested on every state update. Album art lookup
+uses IntersectionObserver, and Library initially renders 200 rows with Show more.
+
+Validation used temporary Playwright scripts and isolated MPD fixtures in /tmp.
+No persistent test suite, frontend framework, build tools, or app dependencies
+were added. See docs/REVIEW.md for coverage and outstanding limits.

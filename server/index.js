@@ -1,7 +1,7 @@
 // server/index.js — Express + WebSocket entry point.
 //
 // Serves the static frontend from ../public and exposes:
-//   GET  /artwork?uri=…    — binary album art (proxies mpc.db.readPicture, cached)
+//   GET  /artwork?uri=…    — binary album art (proxies MPD readpicture, cached)
 //   WS   /mpd              — command/state stream for the frontend
 //
 // Same-origin, so no CORS configuration needed.
@@ -16,8 +16,8 @@ import {
   startIdleLoop,
   handleCommand,
   snapshotState,
-  reconnect,
   mpc,
+  getArtwork,
 } from "./mpd-bridge.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -71,7 +71,7 @@ app.get("/artwork", async (req, res) => {
   }
 
   try {
-    const picture = await mpc.database.getPicture(uri);
+    const picture = await getArtwork(uri);
     if (!picture || !picture.data) {
       // 204 is friendlier than 404 in the browser console — the artwork
       // element's `onerror` handler will still fire and use the gradient.
@@ -92,7 +92,11 @@ app.get("/artwork", async (req, res) => {
 
 // ---------- WebSocket ----------
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: "/mpd" });
+const wss = new WebSocketServer({ server, path: "/mpd", maxPayload: 4 * 1024 * 1024 });
+
+function send(ws, message) {
+  if (ws.readyState === 1) ws.send(JSON.stringify(message));
+}
 
 function broadcast(type, payload) {
   const msg = JSON.stringify({ type, ...payload });
@@ -101,46 +105,44 @@ function broadcast(type, payload) {
   }
 }
 
-wss.on("connection", async (ws) => {
+wss.on("connection", (ws) => {
   console.log("[ws] client connected");
-  // Send the current state right away.
-  try {
-    const state = await snapshotState();
-    ws.send(JSON.stringify({ type: "state", state }));
-  } catch (err) {
-    ws.send(JSON.stringify({ type: "error", error: err.message }));
-  }
-
+  // Register listeners before awaiting MPD so early browser commands aren't lost.
   ws.on("message", async (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); }
-    catch { return ws.send(JSON.stringify({ type: "error", error: "invalid json" })); }
+    catch { return send(ws, { type: "error", error: "invalid json" }); }
 
     try {
       const reply = await handleCommand(msg);
-      ws.send(JSON.stringify({ type: "reply", ...reply }));
+      send(ws, { type: "reply", ...reply });
       // Also broadcast — every client wants to know.
-      broadcast("state", { state: reply.state });
+      if (reply.state) broadcast("state", { state: reply.state });
     } catch (err) {
-      ws.send(JSON.stringify({ type: "reply", id: msg.id, ok: false, error: err.message }));
+      send(ws, { type: "reply", id: msg?.id, ok: false, error: err.message });
     }
   });
 
   ws.on("close", () => console.log("[ws] client disconnected"));
+  ws.on("error", (err) => console.warn("[ws] client error:", err.message));
+  snapshotState().then((state) => send(ws, { type: "state", state }))
+    .catch((err) => send(ws, { type: "error", error: err.message }));
 });
 
 server.listen(PORT, async () => {
   console.log(`[http] serving ${PUBLIC_DIR}`);
   console.log(`[http] listening on http://localhost:${PORT}`);
-  await startMpd();
-  // Once connected, push state on every MPD subsystem change.
+  // Install recovery and state listeners before the first connection attempt.
   startIdleLoop((state) => broadcast("state", { state }));
+  await startMpd();
 });
 
 // Graceful shutdown
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
     console.log(`[${sig}] shutting down`);
+    for (const client of wss.clients) client.terminate();
+    mpc.disconnect();
     wss.close();
     server.close(() => process.exit(0));
   });

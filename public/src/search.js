@@ -46,11 +46,12 @@ function renderResults(panel, groups) {
   for (const group of groups) {
     rows.push(el("li", { class: "search-group" }, group.label));
     for (const item of group.items) {
+      const rowIndex = absoluteIndex;
       const kind = group.label.toLowerCase(); // tracks | artists | albums
       const row = el("li", {
         class: "search-item",
         dataset: { kind, index: String(absoluteIndex) },
-        onMouseenter: () => setActive(panel, absoluteIndex),
+        onMouseenter: () => setActive(panel, rowIndex),
         onClick:      () => activate(panel, kind, item),
       },
         el("span", { class: "search-item-kind" }, kind[0].toUpperCase()),
@@ -94,20 +95,12 @@ function activate(panel, kind, item) {
   if (input) input.value = "";
   lastQuery = "";
   if (kind === "tracks") {
-    mpd.add(item.file).then(() => {
-      // Play the last queued track.
-      mpd.playlist().then((q) => {
-        const pos = q.length - 1;
-        mpd.playAt(pos).catch((e) => toast(e.message, "error"));
-      });
-    }).catch((e) => toast(e.message, "error"));
+    mpd.add(item.file).then(() => mpd.playlist()).then((q) => mpd.playAt(q.length - 1))
+      .catch((e) => toast(e.message, "error"));
   } else if (kind === "artists") {
-    navigate("artists");
-    // Pre-filter via a custom event the artists view can listen for.
-    window.dispatchEvent(new CustomEvent("search:focus", { detail: { kind, value: item } }));
+    navigate("artists", { value: item });
   } else if (kind === "albums") {
-    navigate("albums");
-    window.dispatchEvent(new CustomEvent("search:focus", { detail: { kind, value: item } }));
+    navigate("albums", { value: item });
   }
 }
 
@@ -147,6 +140,7 @@ const runSearch = debounce(async (q) => {
       allArtistsCache || mpd.list("Artist").then((r) => (allArtistsCache = r, r)).catch(() => []),
       allAlbumsCache  || mpd.list("Album").then((r)  => (allAlbumsCache = r, r)).catch(() => []),
     ]);
+    if (q !== lastQuery || document.activeElement !== $("#searchInput")) return;
     const artists = allArtists.filter((name) => String(name).toLowerCase().includes(qLower));
     const albums  = allAlbums.filter((name)  => String(name).toLowerCase().includes(qLower));
     lastResults = groupResults(tracks, artists, albums);
@@ -174,11 +168,13 @@ export function initSearch() {
 
   input.addEventListener("input", () => {
     lastQuery = input.value.trim();
+    lastResults = null;
+    panel.hidden = true;
     runSearch(lastQuery);
   });
 
   input.addEventListener("focus", () => {
-    if (lastResults) panel.hidden = false;
+    if (lastResults && input.value.trim() === lastQuery && lastQuery.length >= 2) panel.hidden = false;
   });
 
   input.addEventListener("keydown", (e) => {
@@ -188,6 +184,7 @@ export function initSearch() {
     else if (e.key === "Escape") {
       input.value = "";
       lastQuery = "";
+      lastResults = null;
       panel.hidden = true;
       input.blur();
     }

@@ -21,7 +21,7 @@ export function spinner() {
 }
 
 /** Build a single track row. */
-export function trackRow(track, index, { playing = false, showArt = false } = {}) {
+export function trackRow(track, index, { playing = false, showArt = false, contextMenu = true } = {}) {
   const title  = track.title  || track.Title  || track.name || track.file?.split("/").pop() || "(untitled)";
   const artist = track.artist || track.Artist || "";
   const album  = track.album  || track.Album  || "";
@@ -30,6 +30,7 @@ export function trackRow(track, index, { playing = false, showArt = false } = {}
 
   const row = el("li", {
     class: "track" + (playing ? " is-playing" : ""),
+    tabindex: "0",
     dataset: { index: String(index), uri, title, artist, album },
   });
 
@@ -51,10 +52,13 @@ export function trackRow(track, index, { playing = false, showArt = false } = {}
   row.appendChild(el("span", { class: "track-duration" }, fmtTime(dur)));
 
   // Right-click context menu (queue view adds to it; library view just plays).
-  row.addEventListener("contextmenu", (e) => {
+  row.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); row.click(); }
+  });
+  if (contextMenu) row.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     showCtxMenu(e.clientX, e.clientY, [
-      { label: "Play now",  onClick: () => { mpd.clear().then(() => addAndPlay(index, track)); } },
+      { label: "Play now",  onClick: () => mpd.playTracks([track]) },
       { label: "Add to queue", onClick: () => mpd.add(uri).then(() => toast("Added to queue", "ok")) },
     ]);
   });
@@ -65,11 +69,15 @@ export function trackRow(track, index, { playing = false, showArt = false } = {}
 /** Re-export commonly used items for view modules. */
 export { el, fmtTime, truncate, mpd, toast, mountArtwork };
 
-/** Helper: add a track and start it. */
-function addAndPlay(_index, track) {
-  const uri = track.file || track.uri;
-  if (!uri) return;
-  mpd.add(uri).then(() => mpd.playlist()).then((q) => mpd.playAt(q.length - 1)).catch((e) => toast(e.message, "error"));
+/** Reload browse data only when the MPD connection becomes available. */
+export function watchConnection(load, waiting) {
+  let wasConnected = false;
+  return mpd.subscribe((state) => {
+    if (!state.connected) { wasConnected = false; waiting?.(); return; }
+    if (wasConnected) return;
+    wasConnected = true;
+    Promise.resolve(load()).catch((err) => toast(err.message, "error"));
+  });
 }
 
 // ---------- Tiny context menu ----------
@@ -90,7 +98,10 @@ export function showCtxMenu(x, y, items) {
   closeCtxMenu();
   const menu = el("ul", { class: "ctx-menu", style: { left: x + "px", top: y + "px" } },
     ...items.map((it) =>
-      el("li", { class: "ctx-item", onClick: () => { closeCtxMenu(); it.onClick(); } }, it.label),
+      el("li", {}, el("button", { class: "ctx-item", type: "button", onClick: () => {
+        closeCtxMenu();
+        Promise.resolve().then(it.onClick).catch((err) => toast(err.message, "error"));
+      } }, it.label)),
     ),
   );
   document.body.appendChild(menu);

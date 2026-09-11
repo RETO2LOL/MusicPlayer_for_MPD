@@ -5,34 +5,55 @@
 //                 { type: "state", state }                       (broadcast on any change)
 //                 { type: "error", id?, error }                 (failure)
 
-import { MPC } from "mpc-js";
+import { MPDConnection } from "./mpd-connection.js";
 
 const HOST = process.env.MPD_HOST || "localhost";
 const PORT = Number(process.env.MPD_PORT || 6600);
 const PASSWORD = process.env.MPD_PASSWORD || null;
 
-export const mpc = new MPC();
+export const mpc = new MPDConnection();
 let connected = false;
-let connecting = null;
 let reconnecting = null; // single in-flight reconnect; everyone awaits this
 
 export async function startMpd() {
-  return connectLoop();
+  return reconnect();
+}
+
+function connectOnce() {
+  // mpc-js does not reject connectTCP when the handshake socket fails.
+  // Convert its events into a bounded connection attempt so retries continue.
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      mpc.off("socket-error", fail);
+      mpc.off("socket-end", fail);
+    };
+    const fail = (error) => {
+      cleanup();
+      reject(new Error(error?.message || error?.errorMessage || "MPD connection closed"));
+    };
+    const timer = setTimeout(() => fail(new Error("MPD connection timed out")), 10000);
+    mpc.on("socket-error", fail);
+    mpc.on("socket-end", fail);
+    mpc.connectTCP(HOST, PORT).then(() => { cleanup(); resolve(); }, fail);
+  });
 }
 
 async function connectLoop() {
   while (!connected) {
     try {
-      await mpc.connectTCP(HOST, PORT);
-      if (PASSWORD) await mpc.connection.sendCommands([`password ${PASSWORD}`]);
+      await connectOnce();
+      if (PASSWORD) await mpc.connection.password(escapeArgument(PASSWORD));
       // Mark connected as soon as the TCP+socket handshake completes.
       // The "ready" event also fires here, but relying on it alone
       // can leave us stuck in disconnected state if the event is
       // missed during a reconnect race.
       connected = true;
+      mpc.emit("bridge-connection", true);
       console.log(`[mpd] connected to ${HOST}:${PORT}`);
       return;
     } catch (err) {
+      try { mpc.disconnect(); } catch { /* already closed */ }
       console.error(`[mpd] connect failed: ${err?.message ?? err}`);
       console.error(`[mpd] retrying in 3s — is MPD running on ${HOST}:${PORT}?`);
       await new Promise((r) => setTimeout(r, 3000));
@@ -46,21 +67,16 @@ async function connectLoop() {
 export function reconnect() {
   if (reconnecting) return reconnecting;
   connected = false;
+  mpc.emit("bridge-connection", false);
   try { mpc.disconnect(); } catch { /* ignore */ }
-  reconnecting = (async () => {
+  reconnecting = Promise.resolve().then(async () => {
     try {
       await connectLoop();
     } finally {
       reconnecting = null;
     }
-  })();
+  });
   return reconnecting;
-}
-
-/** Wait for any in-flight reconnect to finish. Returns immediately if
- *  we're already connected. */
-export async function awaitReconnect() {
-  if (reconnecting) await reconnecting.catch(() => {});
 }
 
 // ---------- Result normalization ----------
@@ -74,9 +90,39 @@ export async function awaitReconnect() {
 
 const basename = (p) => (p || "").split("/").pop() || "";
 
+// mpc-js interpolates these values inside quotes without escaping them.
+function escapeArgument(value) {
+  if (typeof value !== "string" || /[\r\n\0]/.test(value)) throw new Error("Invalid text argument");
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function numberArgument(value, min = 0, max = Infinity, integer = false) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
+    throw new Error("Invalid numeric argument");
+  }
+  return value;
+}
+
+function tagArgument(tag) {
+  if (typeof tag !== "string" || !/^[a-zA-Z][a-zA-Z0-9-]*$/.test(tag)) throw new Error("Invalid tag");
+  return tag;
+}
+
+function filterArgument(filter) {
+  if (!Array.isArray(filter)) throw new Error("Filter must be tag/value pairs");
+  return filter.map(([tag, value]) => [tagArgument(tag), escapeArgument(value)]);
+}
+
+const directoryArgument = (path) => escapeArgument(path === "/" ? "" : path);
+
+export function getArtwork(uri) {
+  return mpc.database.getPicture(escapeArgument(uri));
+}
+
 function normalizeTrack(t) {
   if (!t) return t;
   return {
+    id:          t.id,
     Pos:         t.position != null ? Number(t.position) : (t.Pos != null ? Number(t.Pos) : undefined),
     file:        t.path || t.file,
     title:       t.title || t.Title,
@@ -96,7 +142,9 @@ function normalizeLsEntry(e) {
   if (!e) return e;
   const path = e.path || e.file;
   return {
+    ...normalizeTrack(e),
     file: path,           // alias for paths
+    path,
     name: basename(path), // convenient for display
     type: e.entryType,    // "directory" | "file" | "playlist" | "song"
     title: e.title,
@@ -117,69 +165,95 @@ function normalizeList(x) {
 
 const commands = {
   // Playback
-  async play({ index } = {})          { return mpc.playback.play(index); },
+  async play({ index } = {})          { return mpc.playback.play(index === undefined ? undefined : numberArgument(index, 0, Infinity, true)); },
   async pause()                       { return mpc.playback.pause(); },
   async next()                        { return mpc.playback.next(); },
   async previous()                    { return mpc.playback.previous(); },
-  async seek({ pos })                 { return mpc.playback.seek(pos); },
-  async setvol({ value })             { return mpc.playback.setVolume(value); },
-  async random({ value })             { return mpc.playback.setRandom(!!value); },
+  async seek({ pos })                 { return mpc.playback.seekCur(numberArgument(pos)); },
+  async setvol({ value })             { return mpc.playbackOptions.setVolume(numberArgument(value, 0, 100, true)); },
+  async random({ value })             { return mpc.playbackOptions.setRandom(!!value); },
   async repeat({ value }) {
     // mpd has two flags that together express off / all / one:
     //   off  → repeat 0, single 0
     //   all  → repeat 1, single 0
-    //   one  → repeat 0, single 1
-    const v = Number(value) | 0;
-    await mpc.playback.setRepeat(v === 1 ? 1 : 0);
-    await mpc.playback.setSingle(v === 2);
+    //   one  → repeat 1, single 1
+    const v = numberArgument(value, 0, 2, true);
+    await mpc.playbackOptions.setRepeat(v > 0);
+    await mpc.playbackOptions.setSingle(v === 2);
     return { mode: v };
   },
-  async single({ value })             { return mpc.playback.setSingle(!!value); },
+  async single({ value })             { return mpc.playbackOptions.setSingle(!!value); },
 
   // Queue
   async playlist()                    { return mpc.currentPlaylist.playlistInfo(); },
   async clear()                       { return mpc.currentPlaylist.clear(); },
-  async delete({ position })          { return mpc.currentPlaylist.delete(position); },
-  async move({ from, to })            { return mpc.currentPlaylist.move(from, to); },
-  async add({ uri })                  { return mpc.currentPlaylist.add(uri); },
+  async delete({ position })          { return mpc.currentPlaylist.delete(numberArgument(position, 0, Infinity, true)); },
+  async move({ from, to })            { return mpc.currentPlaylist.move(numberArgument(from, 0, Infinity, true), numberArgument(to, 0, Infinity, true)); },
+  async add({ uri })                  { return mpc.currentPlaylist.add(escapeArgument(uri)); },
+  async playuris({ uris, index = 0 }) {
+    if (!Array.isArray(uris) || !uris.length) throw new Error("No tracks selected");
+    const paths = uris.map(escapeArgument);
+    numberArgument(index, 0, paths.length - 1, true);
+    await mpc.currentPlaylist.clear();
+    // One browser command and one final snapshot; preserve the displayed order.
+    for (const uri of paths) await mpc.currentPlaylist.add(uri);
+    await mpc.playback.play(index);
+  },
   async addsearch({ query, type = "any" } = {}) {
-    return mpc.database.searchAdd({ [type]: query });
+    return mpc.database.searchAdd(filterArgument([[type, query]]));
   },
 
   // Library / browse
-  async lsinfo({ path = "/" } = {})   { return mpc.database.listInfo(path); },
+  async lsinfo({ path = "" } = {})   { return mpc.database.listInfo(directoryArgument(path)); },
   async search({ query, type = "any" } = {}) {
-    return mpc.database.search([[type, query]]);
+    return mpc.database.search(filterArgument([[type, query]]));
+  },
+  async find({ filter = [] } = {}) {
+    return mpc.database.find(filterArgument(filter));
   },
   async list({ tag, filter = [] } = {}) {
-    return mpc.database.list(tag, filter);
+    return mpc.database.list(tagArgument(tag), filterArgument(filter));
   },
-  async update({ path = "/" } = {})   { return mpc.database.update(path); },
+  async update({ path = "" } = {})   { return mpc.database.update(directoryArgument(path)); },
   async stats()                       { return mpc.status.statistics(); },
 
   // Stored (named) playlists
   async listplaylists()               { return mpc.storedPlaylists.listPlaylists(); },
-  async listplaylist({ name })        { return mpc.storedPlaylists.listPlaylistInfo(name); },
-  async load({ name })                { return mpc.storedPlaylists.load(name); },
-  async save({ name })                { return mpc.storedPlaylists.save(name); },
-  // mpd has no explicit "create empty playlist" command — saving the current
-  // (possibly empty) queue under a new name is the canonical way.
-  async createplaylist({ name })      { return mpc.storedPlaylists.save(name); },
-  async renameplaylist({ from, to })  { return mpc.storedPlaylists.rename(from, to); },
-  async deleteplaylist({ name })      { return mpc.storedPlaylists.remove(name); },
-  async addtoplaylist({ name, uri })  { return mpc.storedPlaylists.playlistAdd(name, uri); },
+  async listplaylist({ name })        { return mpc.storedPlaylists.listPlaylistInfo(escapeArgument(name)); },
+  async load({ name })                { return mpc.storedPlaylists.load(escapeArgument(name)); },
+  async playplaylist({ name, index = 0 }) {
+    const tracks = await mpc.storedPlaylists.listPlaylistInfo(escapeArgument(name));
+    return commands.playuris({ uris: tracks.map((t) => t.path), index });
+  },
+  async save({ name })                { return mpc.storedPlaylists.save(escapeArgument(name)); },
+  async createplaylist({ name }) {
+    const escaped = escapeArgument(name);
+    // save fails if the name exists, so an existing playlist is never cleared.
+    await mpc.storedPlaylists.save(escaped);
+    await mpc.storedPlaylists.playlistClear(escaped);
+  },
+  async renameplaylist({ from, to })  { return mpc.storedPlaylists.rename(escapeArgument(from), escapeArgument(to)); },
+  async deleteplaylist({ name })      { return mpc.storedPlaylists.remove(escapeArgument(name)); },
+  async addtoplaylist({ name, uri })  { return mpc.storedPlaylists.playlistAdd(escapeArgument(name), escapeArgument(uri)); },
   async removefromplaylist({ name, position }) {
-    return mpc.storedPlaylists.playlistDelete(name, position);
+    return mpc.storedPlaylists.playlistDelete(escapeArgument(name), numberArgument(position, 0, Infinity, true));
   },
 };
 
-export async function handleCommand(msg) {
+let commandTail = Promise.resolve();
+
+export function handleCommand(msg) {
+  const task = commandTail.then(() => executeCommand(msg));
+  commandTail = task.catch(() => {});
+  return task;
+}
+
+async function executeCommand(msg) {
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) throw new Error("Invalid command message");
   const { id, cmd, ...args } = msg;
+  if (!Object.hasOwn(commands, cmd)) throw new Error(`unknown command: ${cmd}`);
   if (!connected) {
-    // A reconnect may already be in flight — wait for it so the caller
-    // doesn't see a permanent "mpd not connected".
-    await awaitReconnect();
-    if (!connected) throw new Error("mpd not connected");
+    throw new Error("MPD is reconnecting. Please try again shortly.");
   }
   const fn = commands[cmd];
   if (!fn) throw new Error(`unknown command: ${cmd}`);
@@ -189,18 +263,19 @@ export async function handleCommand(msg) {
   } catch (err) {
     // mpc-js sometimes throws on a dead connection without firing its
     // own socket-error event. Kick a reconnect so the next call works.
-    const msg = err?.message ?? String(err);
+    const msg = err?.message ?? err?.errorMessage ?? String(err);
     if (/not connected|disconnected|invalid state/i.test(msg)) {
       reconnect().catch((e) => console.error("[mpd] reconnect failed:", e?.message ?? e));
     }
-    throw err;
+    throw new Error(msg);
   }
   // Normalize track-shaped and lsinfo-shaped results so the frontend
   // sees consistent field names.
-  if (["playlist", "search", "listplaylist", "lsinfo"].includes(cmd)) {
+  if (["playlist", "search", "find", "listplaylist", "lsinfo"].includes(cmd)) {
     result = normalizeList(result);
   }
-  return { id, ok: true, result, state: await snapshotState() };
+  const readOnly = ["playlist", "search", "find", "list", "listplaylist", "listplaylists", "lsinfo", "stats"];
+  return { id, ok: true, result, ...(!readOnly.includes(cmd) ? { state: await snapshotState() } : {}) };
 }
 
 // ---------- State snapshot ----------
@@ -210,18 +285,13 @@ export async function handleCommand(msg) {
 
 export async function snapshotState() {
   if (!connected) {
-    // A reconnect may already be in flight. Wait for it — otherwise we'd
-    // race the reconnect and return a permanently-disconnected state
-    // to every client.
-    await awaitReconnect();
-    if (!connected) {
-      return {
-        connected: false, playing: false, track: null, queue: [],
-        volume: 0, elapsed: 0, duration: 0,
-        random: false, repeat: 0, single: false,
-        stats: { artists: 0, albums: 0, songs: 0 },
-      };
-    }
+    // Respond promptly during an outage; reconnection publishes fresh state.
+    return {
+      connected: false, playing: false, track: null, queue: [],
+      volume: 0, elapsed: 0, duration: 0,
+      random: false, repeat: 0, single: false,
+      stats: { artists: 0, albums: 0, songs: 0 },
+    };
   }
   try {
     const [status, currentSong, playlist, stats] = await Promise.all([
@@ -239,7 +309,7 @@ export async function snapshotState() {
       elapsed: status?.elapsed ?? 0,
       duration: status?.duration ?? 0,
       random: !!status?.random,
-      repeat: Number(status?.repeat ?? 0),
+      repeat: status?.repeat ? (status.single === true ? 2 : 1) : 0,
       single: !!status?.single,
       stats: {
         artists: Number(stats?.artists ?? 0),
@@ -254,7 +324,7 @@ export async function snapshotState() {
     // For real connection failures ("Not connected", "Disconnected")
     // we trigger a reconnect — mpc-js's automatic recovery doesn't
     // always fire `socket-error` reliably, so we kick it ourselves.
-    const msg = err?.message ?? String(err);
+    const msg = err?.message ?? err?.errorMessage ?? String(err);
     console.error("[mpd] snapshot failed:", msg);
     if (/not connected|disconnected|invalid state/i.test(msg)) {
       reconnect().catch((e) => console.error("[mpd] reconnect failed:", e?.message ?? e));
@@ -303,12 +373,10 @@ export function startIdleLoop(onChange) {
   mpc.on("changed", schedule);
 
   // Reconnect if MPD disappears.
-  mpc.on("socket-error", async () => {
-    connected = false;
-    try { mpc.disconnect(); } catch { /* ignore */ }
-    await reconnect();
-  });
-  mpc.on("ready", () => { connected = true; });
+  const recover = () => reconnect().catch((err) => console.error("[mpd] reconnect failed:", err));
+  mpc.on("socket-error", recover);
+  mpc.on("socket-end", recover);
+  mpc.on("bridge-connection", () => snapshotState().then(onChange));
 
   // Periodic health check. mpc-js sometimes fails to fire its
   // `socket-error` event on a dead connection, leaving us stuck in

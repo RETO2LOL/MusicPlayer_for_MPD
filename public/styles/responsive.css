@@ -1,23 +1,69 @@
-/* Mobile / narrow-screen adjustments. */
+@media (min-width: 1500px) {
+  .content-header, .view-body { padding-left: max(40px, calc((100% - 1160px) / 2)); padding-right: max(40px, calc((100% - 1160px) / 2)); }
+}
+@media (max-width: 1100px) {
+  :root { --sidebar-w: 184px; }
+  .topbar { padding-inline: 20px; gap: 16px; }
+  .content-header { padding: 26px 28px 18px; }
+  .view-body { padding: 12px 28px 28px; }
+  .now-playing-card { grid-template-columns: minmax(190px, 260px) minmax(0, 1fr); gap: 28px; }
+  .np-title { font-size: clamp(26px, 3.2vw, 40px); }
+  .player { gap: 20px; padding-inline: 20px; }
+}
 @media (max-width: 860px) {
-  .topbar { grid-template-columns: auto 1fr auto; }
-  .brand-name { display: none; }
-  .layout { grid-template-columns: 64px 1fr; }
-  :root { --sidebar-w: 64px; }
-  .nav-item { font-size: 0; padding: 12px 8px; text-align: center; }
-  .nav-item.is-active { padding-left: 8px; }
-  .player { grid-template-columns: 1fr 1fr; }
-  .extras { grid-column: 1 / -1; justify-content: center; padding-bottom: 4px; }
-  .now-playing-card { grid-template-columns: 1fr; text-align: center; }
-  .now-playing-card .artwork-lg { margin: 0 auto; }
+  :root { --sidebar-w: 76px; --topbar-h: 68px; }
+  .topbar { grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .brand-name, .nav-caption, .sidebar-footer { display: none; }
+  .sidebar { padding: 22px 12px; }
+  .nav-item { justify-content: center; padding: 13px; }
+  .nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .player { grid-template-columns: minmax(0, 1fr) minmax(260px, 1.4fr); }
+  .extras { display: none; }
+  .now-playing-card { grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: 24px; padding-block: 20px 36px; }
+  .np-artist { font-size: 17px; }
+  .album-grid { grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); }
+}
+@media (max-width: 600px) {
+  :root { --player-h: 146px; --topbar-h: 64px; }
+  .topbar { padding-inline: 14px; gap: 10px; }
+  .status { padding: 8px; }
+  .status-label { display: none; }
+  .search-input { font-size: 12px; padding-right: 10px; }
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .sidebar { display: block; border-right: 0; border-bottom: 1px solid var(--border); padding: 8px 10px; overflow-x: auto; }
+  .nav-list { flex-direction: row; gap: 4px; }
+  .nav-list li { flex: 1; }
+  .nav-item { min-height: 42px; padding: 10px; }
+  .content-header { padding: 22px 20px 12px; flex-wrap: wrap; gap: 10px; }
+  .view-title { font-size: 22px; }
+  .content-actions { flex-wrap: wrap; }
+  .view-body { padding: 8px 20px 24px; }
+  .now-playing-card { grid-template-columns: minmax(0, 1fr); gap: 24px; text-align: center; padding: 12px 0 28px; }
+  .artwork-lg { width: min(100%, 280px); margin-inline: auto; }
+  .np-title { font-size: 30px; }
   .np-tags { justify-content: center; }
-  .album-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .np-eyebrow { font-size: 10px; }
+  .player { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 10px 18px max(10px, env(safe-area-inset-bottom)); }
+  .now-playing { gap: 10px; }
+  .artwork-sm { width: 36px; height: 36px; }
+  .now-playing-title { font-size: 12px; }
+  .now-playing-artist { font-size: 11px; }
+  .transport { width: 100%; gap: 5px; }
+  .transport-buttons { gap: 18px; }
+  .ctrl { width: 32px; height: 32px; }
+  .ctrl-play { width: 36px; height: 36px; }
+  .progress { max-width: none; }
+  .album-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; }
+  .track { gap: 10px; padding-inline: 6px; }
+  .track-title { font-size: 13px; }
+  .browse-row { gap: 8px; padding-inline: 6px; }
+  .browse-actions { gap: 2px; }
+  .btn-icon { width: 30px; }
   .toast-stack { left: 16px; right: 16px; }
   .toast { min-width: 0; max-width: none; }
-  .view-body { padding: 12px 16px 24px; }
+  .empty-state { padding-block: 44px; }
 }
-
-@media (max-width: 520px) {
-  .topbar-right .status .status-label { display: none; }
-  .album-grid { grid-template-columns: repeat(2, 1fr); }
+@media (max-height: 650px) and (min-width: 601px) {
+  .now-playing-card { padding-top: 8px; grid-template-columns: 180px minmax(0, 1fr); }
+  .np-title { font-size: 30px; }
 }

@@ -1,125 +1,67 @@
-// views/now-playing.js — large now-playing card with up-next.
+// Keep artwork and queue rows stable between MPD state updates.
+import { el, fmtTime, trackRow, emptyState, mpd, mountArtwork, toast } from "./_shared.js";
 
-import { el, fmtTime, trackRow, emptyState, mpd, mountArtwork } from "./_shared.js";
+let unsub, container, card, meta, upNext, playButton;
+let lastUri, lastMeta, lastQueue;
 
-let unsub = null;
-let container = null;
-let card = null;          // Persistent .now-playing-card so the artwork image
-                          // element is not destroyed on every state push
-                          // (which caused a visible flicker on hover / play).
-let artEl = null;         // Persistent .artwork container inside `card`.
-let metaEl = null;        // Persistent .now-playing-details for in-place updates.
-let upNextEl = null;      // Persistent .up-next section.
-let lastArtUri = null;    // Track which URI is currently mounted so we only
-                          // call mountArtwork when the track actually changes.
-
-function currentIndex(state) {
-  const pos = state.track?.Pos;
-  return pos != null ? Number(pos) : -1;
-}
-
-function nextTracks(state, n = 3) {
-  const i = currentIndex(state);
-  if (i < 0) return [];
-  return state.queue.slice(i + 1, i + 1 + n);
-}
-
-function buildMeta(t) {
-  return el("div", { class: "now-playing-details" },
-    el("div", { class: "np-eyebrow muted" }, t.albumArtist || t.artist || ""),
-    el("h1",  { class: "np-title" }, t.title || t.file?.split("/").pop() || "(untitled)"),
-    el("div", { class: "np-artist" }, t.artist || "—"),
-    el("div", { class: "np-album muted" }, t.album ? `from ${t.album}` : ""),
-    el("div", { class: "np-tags" },
-      t.date   ? el("span", { class: "tag" }, String(t.date)) : null,
-      t.genre  ? el("span", { class: "tag" }, t.genre) : null,
-      t.Time   ? el("span", { class: "tag" }, fmtTime(t.Time)) : null,
-    ),
-  );
-}
-
-function buildUpNext(s) {
-  const upNext = nextTracks(s, 3);
-  if (upNext.length === 0) return null;
-  return el("section", { class: "up-next" },
-    el("h3", null, "Up next"),
-    el("ol", { class: "up-next-list" },
-      ...upNext.map((t2, i) => trackRow(t2, currentIndex(s) + 1 + i, { playing: false, showArt: true })),
-    ),
-  );
-}
-
-function render() {
-  if (!container) return;
-  const s = mpd._state;
-
+function render(s) {
+  playButton.textContent = s.playing ? "Pause" : "Play";
+  playButton.disabled = !s.connected || !s.track;
   if (!s.track) {
-    card = null;
-    artEl = null;
-    metaEl = null;
-    upNextEl = null;
-    lastArtUri = null;
+    card = null; lastUri = lastMeta = lastQueue = null;
     container.replaceChildren(emptyState({
-      icon: "♪",
-      title: "Nothing playing",
-      sub: "Pick something from Queue, Library, Artists, or Albums.",
+      icon: "♪", title: s.connected ? "Your next listen awaits" : "Waiting for MPD",
+      sub: s.connected ? "Explore your library and choose a track to get started." : "Your music will appear when the connection is ready.",
     }));
     return;
   }
-
   const t = s.track;
-
-  // Build the card shell on first render or when the track changes;
-  // then keep it in place and only update the bits that need to change.
-  if (t.file !== lastArtUri) {
-    artEl = el("div", { class: "artwork artwork-lg" });
-    mountArtwork(artEl, { uri: t.file, size: 240 });
-    metaEl = buildMeta(t);
-    card = el("div", { class: "now-playing-card" }, artEl, metaEl);
-    upNextEl = buildUpNext(s);
-    container.replaceChildren(card, upNextEl);
-    lastArtUri = t.file;
-    return;
+  if (!card || lastUri !== t.file) {
+    const art = el("div", { class: "artwork artwork-lg" });
+    mountArtwork(art, { uri: t.file, size: 320 });
+    meta = el("div", { class: "now-playing-details" });
+    card = el("div", { class: "now-playing-card" }, art, meta);
+    upNext = el("section", { class: "up-next" });
+    container.replaceChildren(card, upNext);
+    lastUri = t.file; lastMeta = lastQueue = null;
   }
-
-  // Same track — update meta + up-next in place, leave the artwork alone so
-  // the loaded bitmap is not torn down (which would flicker on hover).
-  if (metaEl && card) {
-    const fresh = buildMeta(t);
-    metaEl.replaceWith(fresh);
-    metaEl = fresh;
+  const metaKey = JSON.stringify([t.title, t.artist, t.album, t.date, t.genre, t.duration, s.playing]);
+  if (metaKey !== lastMeta) {
+    meta.replaceChildren(
+      el("div", { class: "np-eyebrow" }, s.playing ? "Currently playing" : "Ready when you are"),
+      el("h1", { class: "np-title" }, t.title || t.name || "Untitled"),
+      el("div", { class: "np-artist" }, t.artist || "Unknown artist"),
+      el("div", { class: "np-album muted" }, t.album || ""),
+      el("div", { class: "np-tags" },
+        ...[t.date, t.genre, t.duration ? fmtTime(t.duration) : null].filter(Boolean).map((text) => el("span", { class: "tag" }, String(text)))),
+    );
+    lastMeta = metaKey;
   }
-  // Replace up-next (its content depends on the queue, which can change).
-  const next = buildUpNext(s);
-  if (upNextEl) {
-    if (next) {
-      upNextEl.replaceWith((upNextEl = next));
-    } else {
-      upNextEl.remove();
-      upNextEl = null;
-    }
-  } else if (next && card) {
-    upNextEl = next;
-    card.parentNode.insertBefore(upNextEl, card.nextSibling);
+  const position = t.Pos ?? -1;
+  const upcoming = position >= 0 ? s.queue.slice(position + 1, position + 4) : [];
+  const queueKey = JSON.stringify([position, upcoming]);
+  if (queueKey !== lastQueue) {
+    upNext.replaceChildren(
+      el("div", { class: "section-heading" }, el("h3", {}, "Up next"), el("a", { class: "text-link", href: "#queue" }, "View queue →")),
+      upcoming.length ? el("ol", { class: "up-next-list" }, ...upcoming.map((track, i) => {
+        const row = trackRow(track, position + i + 1, { showArt: true, contextMenu: false });
+        row.addEventListener("click", () => mpd.playAt(position + i + 1).catch((err) => toast(err.message, "error")));
+        return row;
+      })) : el("p", { class: "queue-end muted" }, "You're all caught up. Add another track from your library."),
+    );
+    lastQueue = queueKey;
   }
 }
 
 export function mount(root, { setActions }) {
   container = root;
-  setActions(
-    el("button", { class: "btn btn-ghost", type: "button", onClick: () => mpd.toggle() },
-      mpd._state.playing ? "Pause" : "Play"),
-  );
+  playButton = el("button", { class: "btn btn-primary", type: "button", onClick: () => mpd.toggle().catch((err) => toast(err.message, "error")) }, "Play");
+  setActions(playButton);
   unsub = mpd.subscribe(render);
 }
 
 export function unmount() {
   unsub?.();
-  unsub = null;
-  container = null;
-  card = null;
-  artEl = null;
-  metaEl = null;
-  upNextEl = null;
-  lastArtUri = null;
+  container = card = meta = upNext = playButton = null;
+  lastUri = lastMeta = lastQueue = null;
 }

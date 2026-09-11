@@ -22,8 +22,8 @@ function gradientColors(seed) {
   const h1 = seed % 360;
   const h2 = (h1 + 35 + (seed % 25)) % 360;
   return [
-    `hsl(${h1} 55% 22%)`,
-    `hsl(${h2} 65% 14%)`,
+    `hsl(${h1} 18% 23%)`,
+    `hsl(${h2} 15% 16%)`,
   ];
 }
 
@@ -67,7 +67,6 @@ export function mountArtwork(container, { uri, size = 56, rounded = true } = {})
   const prevUri = container.dataset.uri || "";
   const nextUri = uri || "";
   container.dataset.uri = nextUri;
-  container.classList.add("has-artwork");
 
   if (!nextUri) {
     // No art requested — wipe the container and show the placeholder.
@@ -76,15 +75,13 @@ export function mountArtwork(container, { uri, size = 56, rounded = true } = {})
     return null;
   }
 
-  // Same URI, and we already have a successful <img> in the DOM → nothing to do.
+  // Reuse loaded, pending, and failed images until the URI changes.
   const existing = container.querySelector("img.artwork-img");
-  if (prevUri === nextUri && existing && existing.dataset.loaded === "1") {
-    container.classList.add("has-artwork");
-    container.classList.remove("is-loading");
+  if (prevUri === nextUri && existing) {
     return existing;
   }
 
-  // Different URI (or first mount, or previous load failed): build a fresh image.
+  // Different URI or first mount: build a fresh image.
   // Add the placeholder first so the gradient shows immediately, then layer
   // the new <img> on top — the placeholder stays visible until the load
   // event hides the glyph.
@@ -100,11 +97,10 @@ export function mountArtwork(container, { uri, size = 56, rounded = true } = {})
   if (size) {
     img.width = size;
     img.height = size;
-    img.style.width = size + "px";
-    img.style.height = size + "px";
   }
 
   img.addEventListener("load", () => {
+    if (container.querySelector("img.artwork-img") !== img) return;
     img.dataset.loaded = "1";
     container.classList.remove("is-loading");
     container.classList.add("has-artwork");
@@ -113,7 +109,9 @@ export function mountArtwork(container, { uri, size = 56, rounded = true } = {})
     if (g) g.style.display = "none";
   });
   img.addEventListener("error", () => {
+    if (container.querySelector("img.artwork-img") !== img) return;
     img.dataset.loaded = "0";
+    img.hidden = true;
     container.classList.remove("is-loading");
     // Keep the placeholder visible.
     showPlaceholder(container);

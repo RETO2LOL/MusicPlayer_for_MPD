@@ -5,6 +5,7 @@ import { register, start as startRouter } from "./router.js";
 import { initPlayer } from "./player.js";
 import { initSearch } from "./search.js";
 import { initShortcuts } from "./shortcuts.js";
+import { icon } from "./icons.js";
 
 import * as nowPlaying from "./views/now-playing.js";
 import * as queue      from "./views/queue.js";
@@ -15,6 +16,7 @@ import * as albums     from "./views/albums.js";
 import * as files      from "./views/files.js";
 
 document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("[data-icon]").forEach((node) => node.replaceChildren(icon(node.dataset.icon)));
   // Register all views with the router.
   register({ name: "now-playing", title: "Now Playing", mount: nowPlaying.mount, unmount: nowPlaying.unmount });
   register({ name: "queue",        title: "Queue",        mount: queue.mount,      unmount: queue.unmount });

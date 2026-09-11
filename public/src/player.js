@@ -7,6 +7,7 @@ import { $ } from "./dom.js";
 import { mpd } from "./mpd.js";
 import { mountArtwork } from "./artwork.js";
 import { toast } from "./toast.js";
+import { setIcon } from "./icons.js";
 
 const fmt = (s) => {
   if (!s || isNaN(s)) return "0:00";
@@ -28,14 +29,15 @@ function setStatus(state, label) {
 function setPlayButton(playing) {
   const btn = $("#playBtn");
   if (!btn) return;
-  btn.textContent = playing ? "⏸" : "▶";
+  setIcon(btn, playing ? "pause" : "play");
+  btn.setAttribute("aria-label", playing ? "Pause" : "Play");
   btn.setAttribute("title", playing ? "Pause (Space)" : "Play (Space)");
 }
 
 function setNowPlaying(track) {
   const t = $("#nowTitle");
   const a = $("#nowArtist");
-  if (t) t.textContent = track?.title || "Nothing playing";
+  if (t) t.textContent = track?.title || track?.name || "Nothing playing";
   if (a) a.textContent = track?.artist || "—";
 }
 
@@ -49,13 +51,18 @@ function setProgress(position, duration) {
   if (thumb) thumb.style.left = pct + "%";
   if (cur)   cur.textContent = fmt(position);
   if (tot)   tot.textContent = fmt(duration);
+  const slider = $("#progressTrack");
+  slider?.setAttribute("aria-valuemax", String(Math.floor(duration || 0)));
+  slider?.setAttribute("aria-valuenow", String(Math.floor(Math.min(position, duration) || 0)));
+  slider?.setAttribute("aria-valuetext", `${fmt(position)} of ${fmt(duration)}`);
 }
 
 function setVolume(v) {
   const input = $("#volume");
   const mute  = $("#muteBtn");
   if (input) input.value = String(v);
-  if (mute)  mute.textContent = v === 0 ? "🔇" : v < 40 ? "🔉" : "🔊";
+  setIcon(mute, v === 0 ? "mute" : "volume");
+  mute?.setAttribute("aria-label", v === 0 ? "Unmute" : "Mute");
 }
 
 function setArtwork(uri) {
@@ -65,12 +72,18 @@ function setArtwork(uri) {
   slot.classList.toggle("is-pulsing", !!uri);
 }
 
-function setShuffleButton(on)  { $("#shuffleBtn")?.classList.toggle("is-on", !!on); }
+function setShuffleButton(on) {
+  $("#shuffleBtn")?.classList.toggle("is-on", !!on);
+  $("#shuffleBtn")?.setAttribute("aria-pressed", String(!!on));
+}
 function setRepeatButton(mode) {
   const btn = $("#repeatBtn");
   if (!btn) return;
   btn.classList.toggle("is-on", mode > 0);
-  btn.textContent = mode === 2 ? "↻₁" : "↻";   // one vs all
+  setIcon(btn, "repeat");
+  btn.classList.toggle("is-single", mode === 2);
+  btn.setAttribute("aria-label", `Repeat: ${mode === 0 ? "off" : mode === 1 ? "all" : "one"}`);
+  btn.setAttribute("aria-pressed", String(mode > 0));
   btn.title = `Repeat: ${mode === 0 ? "off" : mode === 1 ? "all" : "one"} (R)`;
 }
 
@@ -121,33 +134,37 @@ function wireProgress() {
   if (!trackEl) return;
 
   let dragging = false;
-
-  const seekFromX = (clientX) => {
+  let position = 0;
+  const preview = (clientX) => {
     const r = trackEl.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
-    if (lastDuration > 0) mpd.seek(pct * lastDuration).catch((e) => toast(e.message, "error"));
+    position = pct * lastDuration;
+    setProgress(position, lastDuration);
   };
-
-  trackEl.addEventListener("mousedown", (e) => {
+  trackEl.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !lastDuration) return;
     dragging = true;
-    seekFromX(e.clientX);
+    stopTicker();
+    trackEl.setPointerCapture(e.pointerId);
+    preview(e.clientX);
     e.preventDefault();
   });
-  document.addEventListener("mousemove", (e) => {
+  trackEl.addEventListener("pointermove", (e) => { if (dragging) preview(e.clientX); });
+  trackEl.addEventListener("pointerup", (e) => {
     if (!dragging) return;
-    seekFromX(e.clientX);
+    dragging = false;
+    preview(e.clientX);
+    mpd.seek(position).catch((err) => toast(err.message, "error"));
+    startTicker();
   });
-  document.addEventListener("mouseup", () => { dragging = false; });
-
-  // Touch
-  trackEl.addEventListener("touchstart", (e) => {
-    dragging = true;
-    seekFromX(e.touches[0].clientX);
-  }, { passive: true });
-  trackEl.addEventListener("touchmove", (e) => {
-    if (dragging) seekFromX(e.touches[0].clientX);
-  }, { passive: true });
-  trackEl.addEventListener("touchend", () => { dragging = false; });
+  trackEl.addEventListener("pointercancel", () => { dragging = false; startTicker(); });
+  trackEl.addEventListener("keydown", (e) => {
+    const current = lastElapsed + (lastPlaying ? (performance.now() - lastElapsedAt) / 1000 : 0);
+    const target = { ArrowLeft: current - 5, ArrowRight: current + 5, Home: 0, End: lastDuration }[e.key];
+    if (target === undefined) return;
+    e.preventDefault(); e.stopPropagation();
+    mpd.seek(Math.max(0, Math.min(lastDuration, target))).catch((err) => toast(err.message, "error"));
+  });
 }
 
 // ---------- Public init ----------
@@ -182,14 +199,6 @@ export function initPlayer() {
 
   // Progress seek
   wireProgress();
-
-  // Status pill: click for debug aid (cycles display, doesn't change real state).
-  const cycle = [["disconnected", "Disconnected"], ["connecting", "Connecting…"], ["connected", "Connected"]];
-  let idx = 0;
-  $("#status")?.addEventListener("click", () => {
-    idx = (idx + 1) % cycle.length;
-    setStatus(cycle[idx][0], cycle[idx][1]);
-  });
 
   // Initial render from current state
   const s0 = mpd._state;

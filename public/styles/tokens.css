@@ -1,31 +1,27 @@
-/* Design tokens — colors, sizing, type. Single source of truth. */
+/* Shared palette, spacing, and typography. */
 :root {
-  /* Colors */
-  --bg-0: #0b0d10;
-  --bg-1: #121519;
-  --bg-2: #181c21;
-  --bg-3: #1f242b;
-  --bg-hover: #252b33;
-  --border: #262c34;
-  --text-0: #f4f6f8;
-  --text-1: #c7cdd6;
-  --text-2: #8a93a0;
-  --text-3: #5b6470;
-  --accent: #7c5cff;
-  --accent-hover: #8e72ff;
-  --accent-soft: rgba(124, 92, 255, 0.18);
-  --danger: #ff5a5f;
-  --ok: #2ecc71;
-  --warn: #f5a623;
-
-  /* Sizing */
-  --topbar-h: 56px;
-  --player-h: 88px;
-  --sidebar-w: 220px;
-  --radius: 10px;
-  --radius-sm: 6px;
-
-  /* Type */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+  --bg-0: #111315;
+  --bg-1: #17191b;
+  --bg-2: #202325;
+  --bg-3: #2b2f31;
+  --bg-hover: #323638;
+  --border: #2b2e30;
+  --text-0: #f3f3ed;
+  --text-1: #d3d5ce;
+  --text-2: #a1a79f;
+  --text-3: #8e968e;
+  --accent: #c7dfaa;
+  --accent-hover: #d7edbe;
+  --accent-ink: #1c2919;
+  --accent-soft: #c7dfaa12;
+  --danger: #ee9691;
+  --ok: #b8d9a4;
+  --warn: #dbbd7c;
+  --topbar-h: 80px;
+  --player-h: 104px;
+  --sidebar-w: 224px;
+  --radius: 14px;
+  --radius-sm: 8px;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }

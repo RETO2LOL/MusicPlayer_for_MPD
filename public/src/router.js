@@ -25,21 +25,15 @@ export function register(view) {
   views.set(view.name, view);
 }
 
-export function navigate(name, { silent = false } = {}) {
+export function navigate(name, { value } = {}) {
   if (!views.has(name)) return false;
-  if (location.hash !== "#" + name) {
-    if (silent) {
-      _go(name);
-    } else {
-      location.hash = "#" + name;
-    }
-    return true;
-  }
-  _go(name);
+  const hash = "#" + name + (value !== undefined ? "?" + new URLSearchParams({ value }) : "");
+  if (location.hash === hash) _go(name, value);
+  else location.hash = hash;
   return true;
 }
 
-function _go(name) {
+function _go(name, value) {
   const next = views.get(name);
   if (!next) return;
   if (current?.unmount) {
@@ -54,10 +48,13 @@ function _go(name) {
     container.classList.add("view-enter");
   }
   current = next;
+  container.replaceChildren();
+  container.scrollTop = 0;
+  syncActiveLink();
   try {
     // `mount` may be async (e.g. whenReady) — swallow any rejection so
     // it doesn't surface as an unhandled promise.
-    const r = next.mount(container, { setActions });
+    const r = next.mount(container, { setActions, value });
     if (r && typeof r.catch === "function") r.catch((e) => console.error("view mount failed:", e));
   } catch (e) { console.error("view mount failed:", e); }
 }
@@ -72,6 +69,8 @@ function syncActiveLink() {
   const items = document.querySelectorAll(".nav-item");
   items.forEach((a) => {
     a.classList.toggle("is-active", a.getAttribute("href") === "#" + (current?.name || ""));
+    if (a.classList.contains("is-active")) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
   });
 }
 
@@ -81,19 +80,11 @@ export function start() {
   actionsEl = $("#viewActions");
   if (!container) throw new Error("router.start: #viewBody not found");
 
-  // React to hash changes (back/forward, sidebar clicks).
-  window.addEventListener("hashchange", () => {
-    const name = location.hash.replace(/^#/, "") || "now-playing";
-    _go(name);
-    syncActiveLink();
-  });
-
-  // Initial mount.
-  const name = location.hash.replace(/^#/, "") || "now-playing";
-  if (!views.has(name)) {
-    location.hash = "#now-playing";
-  } else {
-    _go(name);
-  }
-  syncActiveLink();
+  const route = () => {
+    const [name = "now-playing", query = ""] = (location.hash.slice(1) || "now-playing").split("?");
+    if (!views.has(name)) { location.hash = "#now-playing"; return; }
+    _go(name, new URLSearchParams(query).get("value"));
+  };
+  window.addEventListener("hashchange", route);
+  route();
 }

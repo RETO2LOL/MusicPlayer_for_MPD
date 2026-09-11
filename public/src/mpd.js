@@ -49,20 +49,21 @@ class MPDClient {
     for (const fn of this._listeners) fn(this._state);
   }
 
-  /** Resolve when the WebSocket is open (or reject on close). If we're
-   *  already open, resolves on the next microtask. Used by views to
-   *  avoid issuing commands before the WS handshake finishes. */
+  /** Wait for the bridge to confirm that MPD itself is ready. */
   whenReady() {
-    if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (this._state.connected) return Promise.resolve();
     return new Promise((resolve, reject) => {
-      const onOpen = () => { cleanup(); resolve(); };
-      const onClose = () => { cleanup(); reject(new Error("ws closed before open")); };
-      const cleanup = () => {
-        this.ws?.removeEventListener("open", onOpen);
-        this.ws?.removeEventListener("close", onClose);
+      const onState = (state) => {
+        if (!state.connected) return;
+        clearTimeout(timer);
+        this._listeners.delete(onState);
+        resolve();
       };
-      this.ws?.addEventListener("open", onOpen);
-      this.ws?.addEventListener("close", onClose);
+      const timer = setTimeout(() => {
+        this._listeners.delete(onState);
+        reject(new Error("Timed out waiting for MPD"));
+      }, 15000);
+      this._listeners.add(onState);
     });
   }
 
@@ -74,15 +75,20 @@ class MPDClient {
 
     this.ws.addEventListener("open", () => {
       this._reconnectDelay = 1000;
-      this._state.connected = true;
-      this._emit();
     });
 
     this.ws.addEventListener("close", () => {
+      for (const pending of this._pending.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("Connection lost"));
+      }
+      this._pending.clear();
       this._state.connected = false;
       this._state.playing = false;
       this._state.track = null;
       this._state.queue = [];
+      this._state.elapsed = 0;
+      this._state.duration = 0;
       this.ws = null;
       this._emit();
       setTimeout(() => this.connect(), this._reconnectDelay);
@@ -106,6 +112,7 @@ class MPDClient {
     if (msg.type === "reply" && msg.id != null) {
       const p = this._pending.get(msg.id);
       if (p) {
+        clearTimeout(p.timer);
         this._pending.delete(msg.id);
         msg.ok ? p.resolve(msg.result) : p.reject(new Error(msg.error));
       }
@@ -118,8 +125,13 @@ class MPDClient {
         return reject(new Error("not connected"));
       }
       const id = ++this._id;
-      this._pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, cmd, ...args }));
+      const timer = setTimeout(() => {
+        this._pending.delete(id);
+        reject(new Error("MPD command timed out"));
+      }, cmd === "playuris" ? 120000 : 30000);
+      this._pending.set(id, { resolve, reject, timer });
+      try { this.ws.send(JSON.stringify({ id, cmd, ...args })); }
+      catch (err) { clearTimeout(timer); this._pending.delete(id); reject(err); }
     });
   }
 
@@ -147,12 +159,14 @@ class MPDClient {
     return this._send("addsearch", { query, type });
   }
   playAt(index)      { return this._send("play", { index: Number(index) }); }
+  playTracks(tracks, index = 0) { return this._send("playuris", { uris: tracks.map((t) => t.file), index }); }
 
   // ---------- Library / browse ----------
 
   lsinfo(path = "/")            { return this._send("lsinfo", { path }); }
   search(query, type = "any")   { return this._send("search", { query, type }); }
-  list(tag, filter = "")        { return this._send("list", { tag, filter }); }
+  list(tag, filter = [])        { return this._send("list", { tag, filter }); }
+  find(filter)                 { return this._send("find", { filter }); }
   update(path = "/")            { return this._send("update", { path }); }
   stats()                       { return this._send("stats"); }
 
@@ -161,6 +175,7 @@ class MPDClient {
   listPlaylists()              { return this._send("listplaylists"); }
   listPlaylist(name)           { return this._send("listplaylist", { name }); }
   loadPlaylist(name)           { return this._send("load", { name }); }
+  playPlaylist(name, index = 0) { return this._send("playplaylist", { name, index }); }
   savePlaylist(name)           { return this._send("save", { name }); }
   createPlaylist(name)         { return this._send("createplaylist", { name }); }
   renamePlaylist(from, to)     { return this._send("renameplaylist", { from, to }); }

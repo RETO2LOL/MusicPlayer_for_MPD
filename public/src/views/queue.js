@@ -60,7 +60,7 @@ function render() {
       frag.appendChild(existing);
       continue;
     }
-    const row = trackRow(t, i, { playing: i === current, showArt: true });
+    const row = trackRow(t, i, { playing: i === current, showArt: true, contextMenu: false });
     row.dataset.pos = String(i);
     row.addEventListener("click", () => mpd.playAt(Number(row.dataset.pos)).catch((e) => toast(e.message, "error")));
     row.addEventListener("contextmenu", (e) => {

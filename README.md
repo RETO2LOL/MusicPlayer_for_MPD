@@ -1,10 +1,10 @@
-# Music Player for MPD (BETA)
+# Music Player for MPD — v0.2.0 (BETA)
 
 A modern, fully-featured web client for [Music Player Daemon](https://www.musicpd.org/).
 Vanilla HTML / CSS / ES modules on the frontend, a tiny Node / Express server bridges
 the browser to MPD's TCP protocol.
 
-![screenshot](docs/screenshot.png)
+![Now Playing](docs/now-playing.png)
 
 ## Features
 
@@ -15,7 +15,7 @@ the browser to MPD's TCP protocol.
 - **Keyboard shortcuts** for every transport action
 - **Idle-driven state push** — the server subscribes to MPD's idle subsystem, so changes from other clients (e.g. `mpc next` from a shell) reflect instantly
 - **Smooth progress bar** that ticks between state pushes
-- **Animations** — view enter, hover lifts, toast slide-in, artwork pulse on track change
+- **Clean dark interface** — muted green accents, consistent icons, responsive navigation, keyboard focus styles, and reduced-motion support
 - **Toast notifications** for command errors and feedback
 - **Auto-reconnect** with exponential backoff
 
@@ -24,6 +24,8 @@ the browser to MPD's TCP protocol.
 | Now Playing | Albums |
 |-------------|--------|
 | ![now playing](docs/now-playing.png) | ![albums](docs/albums.png) |
+
+Screenshots use a small synthetic library. See [the review notes](docs/REVIEW.md) for fixes and validation details.
 
 ## Run
 
@@ -98,7 +100,8 @@ browser  ──HTTP─▶ /artwork  ──▶  MPD :6600
 ├── server/                       # Express + ws bridge to MPD
 │   ├── package.json
 │   ├── index.js                  # Serves public/, runs /mpd WS + /artwork
-│   └── mpd-bridge.js             # mpc-js wrapper, command handlers, idle loop
+│   ├── mpd-bridge.js             # mpc-js wrapper, command handlers, idle loop
+│   └── mpd-connection.js         # Socket adapter for connection failure recovery
 ├── CHAT_LOG.md                   # Build log of this session
 ├── README.md
 └── .gitignore
@@ -106,10 +109,11 @@ browser  ──HTTP─▶ /artwork  ──▶  MPD :6600
 
 ## State flow
 
-Everything in the UI is a function of one `mpd.subscribe()` callback. The server
+The player and queue subscribe to `mpd.subscribe()`. Browse views load on connection
+and fetch again after reconnection, keeping their DOM stable during playback. The server
 broadcasts the current state (`{ playing, track, queue, volume, elapsed, duration, random, repeat, stats }`)
-on every change (whether triggered by the UI, by another client, or by an MPD
-subsystem change), and each module re-renders the slice it owns.
+after mutations and MPD subsystem changes. Read-only browse commands return their
+results without broadcasting another copy of the queue.
 
 ```
                  ┌──────────────┐

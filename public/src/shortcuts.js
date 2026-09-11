@@ -58,6 +58,7 @@ export function initShortcuts() {
   document.addEventListener("keydown", (e) => {
     // Allow typing in inputs and textareas unimpeded.
     if (isTextInput(document.activeElement)) return;
+    if (e.defaultPrevented || document.activeElement?.closest("button, [role='slider']")) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     switch (e.key) {

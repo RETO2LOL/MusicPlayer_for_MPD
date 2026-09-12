@@ -129,11 +129,13 @@ wss.on("connection", (ws) => {
     .catch((err) => send(ws, { type: "error", error: err.message }));
 });
 
+let stopIdleLoop;
+
 server.listen(PORT, async () => {
   console.log(`[http] serving ${PUBLIC_DIR}`);
   console.log(`[http] listening on http://localhost:${PORT}`);
   // Install recovery and state listeners before the first connection attempt.
-  startIdleLoop((state) => broadcast("state", { state }));
+  stopIdleLoop = startIdleLoop((state) => broadcast("state", { state }));
   await startMpd();
 });
 
@@ -141,6 +143,7 @@ server.listen(PORT, async () => {
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
     console.log(`[${sig}] shutting down`);
+    stopIdleLoop?.();
     for (const client of wss.clients) client.terminate();
     mpc.disconnect();
     wss.close();

@@ -283,15 +283,19 @@ async function executeCommand(msg) {
 // A flat object the UI can subscribe to. Whenever MPD changes, the server
 // re-snapshots and broadcasts the whole thing; the client just assigns.
 
+function disconnectedState() {
+  return {
+    connected: false, playing: false, track: null, queue: [],
+    volume: 0, elapsed: 0, duration: 0,
+    random: false, repeat: 0, single: false,
+    stats: { artists: 0, albums: 0, songs: 0 },
+  };
+}
+
 export async function snapshotState() {
   if (!connected) {
     // Respond promptly during an outage; reconnection publishes fresh state.
-    return {
-      connected: false, playing: false, track: null, queue: [],
-      volume: 0, elapsed: 0, duration: 0,
-      random: false, repeat: 0, single: false,
-      stats: { artists: 0, albums: 0, songs: 0 },
-    };
+    return disconnectedState();
   }
   try {
     const [status, currentSong, playlist, stats] = await Promise.all([
@@ -329,12 +333,7 @@ export async function snapshotState() {
     if (/not connected|disconnected|invalid state/i.test(msg)) {
       reconnect().catch((e) => console.error("[mpd] reconnect failed:", e?.message ?? e));
     }
-    return {
-      connected: false, playing: false, track: null, queue: [],
-      volume: 0, elapsed: 0, duration: 0,
-      random: false, repeat: 0, single: false,
-      stats: { artists: 0, albums: 0, songs: 0 },
-    };
+    return disconnectedState();
   }
 }
 
@@ -342,54 +341,103 @@ export async function snapshotState() {
 //
 // mpc-js auto-enters idle mode after every command and emits "changed"
 // (and "changed-<subsystem>") events on the mpc instance when MPD signals
-// a change. We listen for those and push fresh state to every client,
-// debounced so a flurry of subsystem changes results in one push.
+// a change. It also emits "changed" with an empty list when noidle cancels
+// a wait. Only actual subsystem changes should trigger a fresh snapshot.
 
 export function startIdleLoop(onChange) {
   let timer = null;
   let pushing = false;
+  let pending = false;
+  let stopped = false;
+  let connectionVersion = 0;
+  let checkingHealth = false;
+
+  const publish = (state) => {
+    try { onChange(state); }
+    catch (err) { console.error("[idle] state publication failed:", err?.message ?? err); }
+  };
 
   const flush = async () => {
     timer = null;
-    if (pushing || !connected) return;
+    if (stopped || pushing || !pending || !connected) return;
+    pending = false;
     pushing = true;
+    const version = connectionVersion;
     try {
       const state = await snapshotState();
-      onChange(state);
+      // A disconnect publishes immediately. An older in-flight snapshot
+      // must not overwrite it or the state from a new connection.
+      if (!stopped && version === connectionVersion) publish(state);
     } catch (err) {
       console.error("[idle] snapshot failed:", err?.message ?? err);
     } finally {
       pushing = false;
-      // If a change arrived while we were busy, flush again.
-      if (timer) flush();
+      // Changes stay pending even when a snapshot takes longer than 60 ms.
+      // Start one follow-up timer after it finishes; never recurse or leave
+      // an old timer running alongside the next snapshot.
+      if (pending) schedule();
     }
   };
 
   const schedule = () => {
-    if (timer) return;
+    if (stopped) return;
+    pending = true;
+    if (timer || pushing || !connected) return;
     timer = setTimeout(flush, 60);
   };
 
-  mpc.on("changed", schedule);
+  const changed = (subsystems) => {
+    if (subsystems.length > 0) schedule();
+  };
+
+  const connectionChanged = (isConnected) => {
+    connectionVersion++;
+    clearTimeout(timer);
+    timer = null;
+    pending = false;
+    if (isConnected) schedule();
+    else publish(disconnectedState());
+  };
+
+  mpc.on("changed", changed);
 
   // Reconnect if MPD disappears.
-  const recover = () => reconnect().catch((err) => console.error("[mpd] reconnect failed:", err));
+  const recover = () => {
+    if (!stopped) reconnect().catch((err) => console.error("[mpd] reconnect failed:", err));
+  };
   mpc.on("socket-error", recover);
   mpc.on("socket-end", recover);
-  mpc.on("bridge-connection", () => snapshotState().then(onChange));
+  mpc.on("bridge-connection", connectionChanged);
 
   // Periodic health check. mpc-js sometimes fails to fire its
   // `socket-error` event on a dead connection, leaving us stuck in
   // `connected = true` even though the socket is gone. A lightweight
   // `ping` every 30s catches that and triggers a clean reconnect.
-  setInterval(async () => {
-    if (!connected || reconnecting) return;
+  const healthTimer = setInterval(async () => {
+    if (stopped || checkingHealth || !connected || reconnecting) return;
+    checkingHealth = true;
     try {
       await mpc.connection.ping();
     } catch (err) {
       const msg = err?.message ?? String(err);
       console.warn("[mpd] health-check ping failed:", msg);
-      reconnect().catch((e) => console.error("[mpd] reconnect failed:", e?.message ?? e));
+      recover();
+    } finally {
+      checkingHealth = false;
     }
-  }, 30_000).unref?.();
+  }, 30_000);
+  healthTimer.unref?.();
+
+  if (connected) schedule();
+
+  return () => {
+    stopped = true;
+    pending = false;
+    clearTimeout(timer);
+    clearInterval(healthTimer);
+    mpc.off("changed", changed);
+    mpc.off("socket-error", recover);
+    mpc.off("socket-end", recover);
+    mpc.off("bridge-connection", connectionChanged);
+  };
 }

@@ -422,3 +422,32 @@ uses IntersectionObserver, and Library initially renders 200 rows with Show more
 Validation used temporary Playwright scripts and isolated MPD fixtures in /tmp.
 No persistent test suite, frontend framework, build tools, or app dependencies
 were added. See docs/REVIEW.md for coverage and outstanding limits.
+
+## Pickup notes — 2026-09-12: idle event loop
+
+The user explicitly authorized changing the bridge event loop if needed,
+superseding the earlier instruction to leave it untouched.
+
+Two bugs were reproduced and fixed in `server/mpd-bridge.js`:
+- `mpc-js` emits `changed` with an empty subsystem array when a command cancels
+  idle with `noidle`. Treating that as a real change made snapshots trigger
+  more snapshots indefinitely. Empty events are now ignored.
+- The old scheduler used its timer as the pending-change flag. If that timer
+  fired during a slow snapshot, the change was lost; recursively flushing
+  could also leave an old timer alive. A separate pending flag now retains
+  changes and schedules one follow-up after the current snapshot finishes.
+
+Connection changes use the same scheduler, with immediate offline publication
+and a connection version check to discard stale idle snapshots. The 60 ms
+coalescing delay and 30-second health check remain. Health checks cannot overlap.
+`startIdleLoop()` returns cleanup that removes its listeners and timers;
+`server/index.js` calls it before disconnecting on shutdown.
+
+Validation: temporary checks in `/tmp` reproduced both original bugs and passed
+after the fix, including bursts, slow snapshots, reconnect races, and cleanup.
+An isolated real MPD with two silent WAV tracks verified quiet idle periods,
+read-only queries without broadcasts, queue/playback/volume changes from another
+client, browser pause/repeat controls, MPD restart recovery, subsequent commands,
+and clean server shutdown. JavaScript syntax and diff whitespace checks passed.
+The frontend already advances playback progress with requestAnimationFrame.
+No persistent tests or dependencies were added.

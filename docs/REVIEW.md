@@ -53,3 +53,21 @@ Temporary browser tools, checks, audio fixtures, and MPD configuration stayed in
 - A completed database rescan or playlist edit from another client does not automatically refresh every browse view. Reopening the view reloads it; search artist/album caches expire after five minutes.
 - Playback remains controlled through queue positions, so simultaneous changes from another MPD client can race position-based actions.
 - Verification used an isolated fixture, not the user's full library or audio device. No persistent automated suite was added, respecting the previous preference recorded in the chat log.
+
+## Follow-up — 2026-09-12: idle event loop
+
+With the user's authorization, the previously preserved idle scheduler was fixed.
+`mpc-js` emits an empty `changed` event when a command interrupts idle; the bridge
+now ignores it, preventing state snapshots from triggering more snapshots.
+A separate pending flag preserves changes during slow snapshots and schedules
+one follow-up without recursive flushing or leftover timers. Connection changes
+share that scheduler, and stale idle snapshots are discarded after a connection
+transition. Shutdown removes the loop's listeners and timers. Health checks
+cannot overlap; the 60 ms coalescing delay and 30-second health interval remain.
+
+Temporary checks reproduced both original bugs and verified the fixes, event
+bursts, reconnect races, and cleanup. An isolated real MPD and WebSocket client
+verified quiet idle periods, read-only browsing without state broadcasts,
+external queue/playback/volume changes, browser controls, MPD restart recovery,
+commands after recovery, and clean shutdown. Syntax and whitespace checks passed.
+No persistent test suite or dependencies were added.

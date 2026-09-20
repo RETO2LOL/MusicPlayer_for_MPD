@@ -1,4 +1,4 @@
-# Music Player for MPD — v0.2.0 (BETA)
+# Music Player for MPD — v1.0.0
 
 A modern, fully-featured web client for [Music Player Daemon](https://www.musicpd.org/).
 Vanilla HTML / CSS / ES modules on the frontend, a tiny Node / Express server bridges
